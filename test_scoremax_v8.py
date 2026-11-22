@@ -106,6 +106,18 @@ class Tests(unittest.TestCase):
                "hp":600,"max_hp":1400,"charging":False}
         self.assertFalse(laser_ambush(me,enemy,[enemy],self.zone,170,6))
 
+    def test_early_upgrade_prefers_regenerative_survival(self):
+        opts=[{"id":"nanites"},{"id":"plating"},{"id":"jets"}]
+        self.assertEqual(upgrade_scoremax(opts,self.me,60,self.zone),0)
+    def test_late_upgrade_prefers_storm_hp_over_jets(self):
+        opts=[{"id":"nanites"},{"id":"plating"},{"id":"jets"}]
+        late=dict(self.zone,next_radius=25,dps=160)
+        self.assertEqual(upgrade_scoremax(opts,self.me,360,late),1)
+    def test_late_upgrade_prefers_hp_over_armor(self):
+        opts=[{"id":"armor"},{"id":"plating"},{"id":"sensors"}]
+        late=dict(self.zone,next_radius=25,dps=160)
+        self.assertEqual(upgrade_scoremax(opts,self.me,380,late),1)
+
     def test_probability_score_identity(self):
         self.assertAlmostEqual(expected_placement_proxy(16,[.8]*15),12.)
 
