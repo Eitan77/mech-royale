@@ -37,6 +37,11 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
             yaw = enemy["aim"][0]
             aim_lines.append((q, d, math.cos(yaw), math.sin(yaw), weight,
                               enemy.get("charging", False), "lightning" in enemy.get("weapons", ())))
+    charger = next((q for q, d, _, _, _, charging, _ in aim_lines if charging and d < 160), None)
+    if charger is not None:
+        options.append((-math.cos(preferred), -math.sin(preferred)))
+    charger_muzzle = None if charger is None else (charger[0], charger[1], charger[2] + 7)
+    exposed = bool(charger_muzzle and arena.shot(charger_muzzle, (*p[:2], p[2] + 5 * size)))
     incoming = []
     for bullet in projectiles[:16]:
         q, v = bullet["pos"], bullet["vel"]
@@ -84,6 +89,17 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
                     score += weight * min(7, crossed - cross0) * (1.55 if charging else .52)
                 if lightning and d < 60:
                     score += weight * .8 * (math.hypot(x - q[0], y - q[1]) - d)
+            if charger_muzzle and time.perf_counter() < deadline:
+                sx, sy = samples[2]
+                z = arena.ground(sx, sy) + 5 * size
+                cover = not arena.shot(charger_muzzle, (sx, sy, z))
+                if cover:
+                    tx, ty = samples[-1]
+                    tz = arena.ground(tx, ty) + 5 * size
+                    if not arena.shot(charger_muzzle, (tx, ty, tz)):
+                        score += 18 if exposed else 6
+                elif not exposed:
+                    score -= 10
             for q, v, mortar in incoming:
                 closest = math.inf
                 for i, (sx, sy) in enumerate(samples, 1):
