@@ -746,7 +746,7 @@ class Bot:
         retreat = self.mode in ("EVADE", "HEAL")
         self.recovering = retreat
         objective = None
-        if retreat and not urgent and (not final or distance(p, goal) < 6 and remain > 20):
+        if retreat and threats and not urgent and (not final or distance(p, goal) < 6 and remain > 20):
             cover = self.cover_point(p, threats, zone, size, anchor, now, started + 0.009)
             if cover is not None and (not final or distance(cover, anchor) < 7):
                 goal = cover
