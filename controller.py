@@ -314,7 +314,14 @@ class Bot:
                     laser = next(w for w in obs["self"]["weapons"] if w and w["kind"] == "laser")
                     damage = laser["stats"]["damage"] * (1 + 0.04 * min(10, count))
                     if damage >= item.get("hp", 350):
-                        value += 12
+                        # A full-charge laser one-shots 300-HP crates from
+                        # zero cubes, and 350-HP drones after 3 cubes.
+                        # The real payoff is the cubes and upgrades, not the
+                        # nominal damage. Prefer accessible free resources.
+                        if d < 90 and nearest > 115 and now < 245 and count < 10:
+                            value += 26 if group == "mechs" else 20
+                        else:
+                            value += 12
                 if group == "cubes" and count + 1 in self.config["cubes"]["upgrade_thresholds"]:
                     value += 9
                 score = value - 2.8 * travel(q, d) - 0.29 * (now - seen)
