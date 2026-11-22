@@ -50,6 +50,15 @@ class Tests(unittest.TestCase):
         self.me["cubes"]=3
         self.assertTrue(resource_laser_silence(
             self.me,drone,999,False,False,40))
+    def test_gun_can_resume_while_laser_on_cooldown(self):
+        laser=self.me["weapons"][1]
+        laser["cooldown"]=1.5
+        self.assertFalse(resource_laser_silence(
+            self.me,{"kind":"crate","hp":300},999,False,False,40))
+        laser["charge"]=.5
+        self.assertTrue(resource_laser_silence(
+            self.me,{"kind":"crate","hp":300},999,False,False,40))
+
     def test_laser_resource_silence_no_enemy_near(self):
         self.assertFalse(resource_laser_silence(
             self.me,{"kind":"crate","hp":300},70,False,False,40))
