@@ -411,6 +411,19 @@ class Bot:
         final_guard = bool(final and defensive_contest(
             me, target, obs["zone"], obs["t"], retreat, self.recovering))
         offensive = offensive or final_guard
+        # Placement utility: a 100-HP isolated enemy can be finished in
+        # 3 gun hits. That is worth one point without a long exposed duel.
+        nearby_allies = (sum(1 for e in obs["mechs"]
+                             if e["kind"]=="mech" and
+                             e["id"]!=target["id"] and
+                             distance(me["pos"],e["pos"])<110)
+                         if is_mech else 0)
+        finish_pickoff = (is_mech and not retreat and not urgent and not final
+                          and self.mode in ("TRAVEL","FIGHT") and
+                          obs["alive"]>6 and
+                          (obs["t"]>90 or target["hp"]<65) and
+                          opportunistic_kill(target,me,obs["alive"],nearby_allies))
+        offensive = offensive or finish_pickoff
         # An isolated nearly finishable backshot from beyond audible charge
         # range is valuable; a distant open-ended gunfight is not.
         ambush = (is_mech and not retreat and not urgent and not final and
@@ -418,7 +431,7 @@ class Bot:
                   laser_ambush(me, target,
                               [e for e in obs["mechs"] if e["kind"]=="mech"],
                               obs["zone"], obs["t"], obs["alive"]))
-        if is_mech and not final_guard and not ambush and not deliberate_mech_fire(
+        if is_mech and not final_guard and not finish_pickoff and not ambush and not deliberate_mech_fire(
                 me, target, self.mode, obs["t"], self.last_damage, obs["zone"]):
             # No free placement points for 140m potshots; do not trigger
             # the entire cooperative practice squad unnecessarily.
@@ -431,8 +444,9 @@ class Bot:
         # for an actual disengagement or committed final-circle recovery.
         return_fire = (is_mech and (not final or urgent) and d < 225
                        and not retreat and not self.recovering and
-                       deliberate_mech_fire(me, target, self.mode, obs["t"],
-                                           self.last_damage, obs["zone"]))
+                       (finish_pickoff or deliberate_mech_fire(
+                           me, target, self.mode, obs["t"],
+                           self.last_damage, obs["zone"])))
         gun_clear = clear if aim_point == lead else self.arena.shot(origin, lead)
         gun_aligned = bool(gun and gun.get("reload", 0) <= .1 and gun["cooldown"] <= .11
                            and (gun_clear or d < 35)
