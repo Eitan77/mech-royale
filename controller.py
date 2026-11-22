@@ -484,7 +484,7 @@ class Bot:
             return goal
         span = min(d, 65)
         limit = (p[0] + (goal[0] - p[0]) * span / d, p[1] + (goal[1] - p[1]) * span / d)
-        if self.arena.walk(p[:2], limit, size):
+        if self.arena.walk(p[:2], limit, size) and (span == d or not self.path):
             self.detour = None
             self.path.clear()
             return goal
@@ -493,11 +493,11 @@ class Bot:
             self.path.clear()
             self.detour = None
         if (changed or not self.path or now - self.path_update > 1.6) and time.perf_counter() < start + .023:
-            new_path = self.arena.route(p[:2], limit, round(size, 2), start + .028)
+            new_path = self.arena.route(p[:2], goal, round(size, 2), start + .028)
             if new_path or changed:
                 self.path = new_path
             self.path_goal, self.path_update = goal, now
-        while self.path and distance(p, self.path[0]) < 2.5:
+        while self.path and distance(p, self.path[0]) < 1.5:
             self.path.pop(0)
         for node in reversed(self.path[:4]):
             if self.arena.walk(p[:2], node, size):

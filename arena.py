@@ -124,17 +124,20 @@ class Arena:
             previous = z
         return True
 
-    def snap(self, point, size):
+    def snap(self, point, size, outgoing):
         cx, cy = (round(value / STEP) for value in point)
         local = [(cx + dx, cy + dy) for dx in range(-3, 4) for dy in range(-3, 4)]
         for node in sorted(local, key=lambda p: math.dist(point, (p[0] * STEP, p[1] * STEP))):
             x, y = node[0] * STEP, node[1] * STEP
-            if self.clear(x, y, self.ground(x, y), size * 2.5 + 0.25, size * 9):
+            endpoint = (x, y)
+            if self.clear(x, y, self.ground(x, y), size * 2.5 + 0.25, size * 9) and (
+                self.walk(point, endpoint, size) if outgoing else self.walk(endpoint, point, size)
+            ):
                 return node
         return cx, cy
 
     def route(self, a, b, size, deadline):
-        start, goal = self.snap(a, size), self.snap(b, size)
+        start, goal = self.snap(a, size, True), self.snap(b, size, False)
         queue = [(math.dist(start, goal), 0, start)]
         cost, parent = {start: 0}, {}
         best, best_distance = start, math.dist(start, goal)
@@ -154,9 +157,15 @@ class Arena:
                     cost[other], parent[other] = total, node
                     heappush(queue, (total + 1.35 * math.dist(other, goal), total, other))
         route = []
+        if math.dist(a, (start[0] * STEP, start[1] * STEP)) > 0.8:
+            start_point = (start[0] * STEP, start[1] * STEP)
+        else:
+            start_point = None
         while best != start:
             route.append((best[0] * STEP, best[1] * STEP))
             best = parent[best]
+        if start_point is not None:
+            route.append(start_point)
         return route[::-1]
 
     def air_lane(self, a, b, altitude, size):
