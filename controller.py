@@ -758,6 +758,13 @@ class Bot:
             "close":sum(distance(p,e["pos"])<60 for e in enemies),
             "laser_exposed":0,"charged_exposed":int(charging_now),
             "aimed_exposed":0,"closest":nearest}
+        # Older recorded-observation tests and any cached pre-upgrade state
+        # use V5 danger keys; normalize rather than crash on absent fields.
+        if "charged_exposed" not in danger:
+            danger = dict(danger, close=sum(distance(p,e["pos"])<60 for e in enemies),
+                          laser_exposed=danger.get("lasers",0),
+                          charged_exposed=danger.get("charging",0),
+                          aimed_exposed=0)
         laser_threat = danger["laser_exposed"] > 0
         estimates = {enemy["id"]: duel(me, enemy, self.config["weapons"], len(threats)) for enemy in enemies}
         new_mode = mode_v7(self.mode, hp, danger, urgent, now,
