@@ -20,8 +20,9 @@ def npc_pressure(me,visible,arena,now,last_npc_damage=-999):
     recent=now-last_npc_damage<3.5
     p=me["pos"]
     active=[]
+    visible=sorted((e for e in visible if e.get("kind")=="npc"),
+                   key=lambda e:distance(p,e["pos"]))[:5]
     for e in visible:
-        if e.get("kind")!="npc": continue
         d=distance(p,e["pos"])
         limit=90 if recent else 48
         if d>limit:continue
