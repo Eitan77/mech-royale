@@ -161,3 +161,36 @@ def laser_ambush(me,target,all_enemies,zone,now,alive):
     if zone["next_radius"]<75 and distance(me["pos"],zone["next_center"])>zone["next_radius"]-18:
         return False
     return True
+
+
+def upgrade_scoremax(choices,me,now,zone):
+    """Stage-aware upgrades: regen early, final HP bank and storm endurance late."""
+    hp=me["hp"]/max(1,me["max_hp"])
+    has={w["kind"] for w in me["weapons"] if w}
+    late=(now>=285 or zone["next_radius"]<=70)
+    very_late=(now>=350 or zone["next_radius"]<=25)
+    scores={
+        "nanites":102 if now<225 and hp>.22 else (83 if not late else 48),
+        "plating":92 if not late else 113 if very_late else 106,
+        "armor":89 if hp<.55 else 79 if not late else 55,
+        "jets":83 if not late else 96 if zone["next_radius"]==0 else 80,
+        "servos":81 if not late else 74,
+        "capacitor":72 if not late else 88 if zone["next_radius"]==0 else 59,
+        "reactor":71 if not late else 45,
+        "sensors":40,
+        "gyros":50,
+        "gun_damage":60,
+        "gun_rate":56,
+        "gun_velocity":50,
+        "gun_mag":41,
+        "laser_charge":78 if "laser" in has else 48,
+        "laser_damage":86 if "laser" in has else 45,
+        "laser_pierce":44,
+        "lightning_range":78 if "lightning" in has else 40,
+        "lightning_efficiency":65 if "lightning" in has else 45,
+        "lightning_chain":48,
+        "mortar_splash":55,
+        "mortar_reload":50,
+        "mortar_velocity":35,
+    }
+    return max(range(len(choices)),key=lambda i:scores.get(choices[i]["id"],40))
