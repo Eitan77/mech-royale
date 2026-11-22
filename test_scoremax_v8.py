@@ -118,6 +118,25 @@ class Tests(unittest.TestCase):
         late=dict(self.zone,next_radius=25,dps=160)
         self.assertEqual(upgrade_scoremax(opts,self.me,380,late),1)
 
+    def test_mortar_uses_high_dps_storm_for_weak_edge_enemy(self):
+        me=dict(self.me,pos=[0,0,0],hp=1350,energy=80,in_zone=True)
+        z=dict(self.zone,center=[0,0],radius=70,next_radius=25,dps=100)
+        foe={"id":2,"kind":"mech","pos":[65,0,0],"hp":400,
+             "max_hp":1400,"weapons":["gun"]}
+        self.assertTrue(storm_mortar_finisher(me,foe,[foe],z,12))
+    def test_mortar_does_not_provoke_at_low_storm_dps(self):
+        me=dict(self.me,pos=[0,0,0],hp=1350,energy=80,in_zone=True)
+        z=dict(self.zone,center=[0,0],radius=70,next_radius=25,dps=35)
+        foe={"id":2,"kind":"mech","pos":[65,0,0],"hp":400,
+             "max_hp":1400,"weapons":["gun"]}
+        self.assertFalse(storm_mortar_finisher(me,foe,[foe],z,12))
+    def test_mortar_protects_score_when_others_nearby(self):
+        me=dict(self.me,pos=[0,0,0],hp=1350,energy=80,in_zone=True)
+        z=dict(self.zone,center=[0,0],radius=70,next_radius=25,dps=100)
+        foe={"id":2,"kind":"mech","pos":[65,0,0],"hp":400,
+             "max_hp":1400,"weapons":["gun"]}
+        another=dict(foe,id=3,pos=[20,0,0])
+        self.assertFalse(storm_mortar_finisher(me,foe,[foe,another],z,12))
     def test_probability_score_identity(self):
         self.assertAlmostEqual(expected_placement_proxy(16,[.8]*15),12.)
 
