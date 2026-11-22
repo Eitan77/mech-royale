@@ -16,6 +16,8 @@ from scoremax_v8 import (npc_pressure, immediate_npc_escape,
 from foliage_v9 import Foliage, should_ghost, stealth_vector
 from mechanics_v9 import (one_shot_laser_ambush, easy_laser_drone,
                           contest_center, storm_finish)
+from tactical_v10 import (imminent_projectile, sniper_choice,
+                          resource_laser_silence)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -132,6 +134,7 @@ class Bot:
         self.foliage_scan_at = -100.
         self.foliage_until = -100.
         self.foliage_active = False
+        self.ambush_target_id = None
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -386,6 +389,7 @@ class Bot:
         if not target:
             act["reload"] = bool(gun and gun.get("ammo", 0) <= 6)
             self.laser_target = None
+            self.ambush_target_id = None
             return
         d = distance(origin, target["pos"])
         body, lead = self.gun_solution(origin, target, gun["stats"] if gun else self.config["weapons"]["gun"])
@@ -417,9 +421,17 @@ class Bot:
         final_guard = (is_mech and contest_center(
             me,target,obs["zone"],obs["t"],retreat))
         all_mechs=[a for a in obs["mechs"] if a["kind"]=="mech"]
-        ambush = (is_mech and not retreat and not urgent and not final and
-                  one_shot_laser_ambush(me,target,all_mechs,obs["zone"],
-                                       obs["t"],obs["alive"]))
+        fresh_ambush = (is_mech and not retreat and not urgent and not final and
+                        one_shot_laser_ambush(me,target,all_mechs,obs["zone"],
+                                             obs["t"],obs["alive"]))
+        # Multi-tick laser charge: remain silent if target faces us midway.
+        if fresh_ambush and not charge:
+            self.ambush_target_id = target["id"]
+        ambush_locked = bool(is_mech and self.ambush_target_id==target["id"]
+                             and charge)
+        ambush = fresh_ambush or ambush_locked
+        if not ambush and not charge:
+            self.ambush_target_id = None
         offensive = offensive or final_guard or ambush
         if self.recovering:
             # Avoid dealing damage during genuine escape/heal phases:
@@ -441,6 +453,10 @@ class Bot:
         gun_aligned = bool(gun and gun.get("reload", 0) <= .1 and gun["cooldown"] <= .11
                            and (gun_clear or d < 35)
                            and shot_connects(self.arena, origin, me, act["aim"], target, gun, radius, height))
+        one_shot_resource = resource_laser_silence(
+            me,target,min((distance(me["pos"],e["pos"])
+                           for e in all_mechs),default=999.),
+            retreat,urgent,obs["t"])
         mortar = next((w for w in me["weapons"] if w and w["kind"] == "mortar"), None)
         zone = obs["zone"]
         outward = abs(distance(target["pos"], zone["center"]) - zone["radius"]) < 13
@@ -469,7 +485,8 @@ class Bot:
                 # Hold the loud 320m-carry gun during a 140m-silent
                 # rear-laser ambush, even when we otherwise could potshot.
                 act["fire"][i] = bool((offensive or return_fire) and
-                                      not ambush and gun_aligned)
+                                      not ambush and not one_shot_resource and
+                                      gun_aligned)
             elif kind == "mortar" and mortar_aim:
                 act["fire"][i] = angle_delta(mortar_aim[0], me["aim"][0]) < .035 and abs(mortar_aim[1] - me["aim"][1]) < .023
             elif kind == "lightning":
@@ -804,6 +821,10 @@ class Bot:
                 new_mode="EVADE"
             elif not enemies and hp > .78:
                 new_mode="FIGHT"
+        # HEAL is not safe when a bullet/shell is on a collision course.
+        if (new_mode=="HEAL" and not urgent and not final and
+                imminent_projectile(me,obs["projectiles"],zone)):
+            new_mode="EVADE"
         if new_mode != self.mode:
             self.mode, self.mode_since = new_mode, now
         retreat = self.mode in ("EVADE", "HEAL")
@@ -1011,6 +1032,12 @@ class Bot:
                     candidates = (sorted(contesting,
                         key=lambda e: distance(e["pos"],zone["next_center"]))+
                         [e for e in candidates if e not in contesting])
+                # The ambush must actually be selected as the target.
+                if kind=="laser" and not retreat and now<320:
+                    sniper=sniper_choice(me,enemies,zone,now,obs["alive"],
+                                         one_shot_laser_ambush)
+                    if sniper is not None and sniper["id"]!=candidates[0]["id"]:
+                        candidates=[sniper]+[e for e in candidates if e["id"]!=sniper["id"]]
                 target = next((enemy for enemy in candidates[:3] if self.arena.shot(
                     origin, (*enemy["pos"][:2], enemy["pos"][2] + 4.5 * (1 + .05 * enemy.get("cubes", 0)))
                 )), candidates[0])
