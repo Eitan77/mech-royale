@@ -33,11 +33,11 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
     for enemy, weight in threats[:4]:
         q = enemy["pos"]
         d = math.hypot(p[0] - q[0], p[1] - q[1])
-        if 5 < d < 240:
+        if 5 < d < (280 if "laser" in enemy.get("weapons", ()) else 235):
             yaw = enemy["aim"][0]
             aim_lines.append((q, d, math.cos(yaw), math.sin(yaw), weight,
                               enemy.get("charging", False), "lightning" in enemy.get("weapons", ())))
-    charger = next((q for q, d, _, _, _, charging, _ in aim_lines if charging and d < 160), None)
+    charger = next((q for q, d, _, _, _, charging, _ in aim_lines if charging and d < 280), None)
     if charger is not None:
         options.append((-math.cos(preferred), -math.sin(preferred)))
     charger_muzzle = None if charger is None else (charger[0], charger[1], charger[2] + 7)
