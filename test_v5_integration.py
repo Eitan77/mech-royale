@@ -46,6 +46,47 @@ class IntegrationTests(unittest.TestCase):
         enemy["charging"]=True
         self.action(obs)
 
+    def test_evade_can_short_an_active_laser(self):
+        obs=copy.deepcopy(self.observations[0])
+        me=obs["self"]
+        p=me["pos"]
+        me["hp"]=me["max_hp"]*.95
+        me["energy"]=me["max_energy"]
+        me["aim"]=[0,0]
+        me["weapons"][1]={
+            "kind":"lightning","cooldown":0,
+            "stats":copy.deepcopy(self.hello["config"]["weapons"]["lightning"])
+        }
+        obs["events"]=[]
+        obs["crates"]=[]
+        obs["mechs"]=[{
+            "id":7,"kind":"mech","pos":[p[0]+20,p[1],p[2]],
+            "vel":[0,0,0],"aim":[math.pi,0],
+            "hp":1400,"max_hp":1400,"cubes":0,
+            "weapons":["gun","laser"],"charging":True
+        }]
+        bot=Bot(copy.deepcopy(self.hello))
+        # Force unobstructed geometry to exercise action prioritization,
+        # not the particular terrain at this sample position.
+        bot.arena.shot=lambda a,b: True
+        action=bot.act(obs)
+        self.assertEqual(bot.mode,"EVADE")
+        self.assertFalse(bot.recovering)
+        self.assertTrue(action["fire"][1])
+
+    def test_dense_squad_observation_does_not_crash(self):
+        obs=copy.deepcopy(self.observations[0])
+        p=obs["self"]["pos"]
+        obs["events"]=[]
+        obs["mechs"]=[{
+            "id":j+1,"kind":"mech",
+            "pos":[p[0]+(40+7*j)*math.cos(j*math.tau/15),
+                   p[1]+(40+7*j)*math.sin(j*math.tau/15),p[2]],
+            "vel":[0,0,0],"aim":[0,0],"hp":1200,"max_hp":1400,
+            "cubes":0,"weapons":["gun","laser"],"charging":j%3==0
+        } for j in range(15)]
+        self.action(obs)
+
     def test_final_center_observation_does_not_crash(self):
         obs=copy.deepcopy(self.observations[0])
         obs["t"]=397
