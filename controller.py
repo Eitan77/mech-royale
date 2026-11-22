@@ -89,6 +89,8 @@ class Bot:
         self.cover = None
         self.cover_update = -100
         self.last_progress = None
+        self.crossing = None
+        self.crossing_retry = -100
         self.detour = None
         self.launching = False
         self.laser_target = None
@@ -522,6 +524,33 @@ class Bot:
             return best
         return self.path[0] if self.path else (p[0] + math.cos(ideal), p[1] + math.sin(ideal))
 
+    def cross_obstacle(self, act, me, goal, zone, size, now, deadline):
+        p, stats = me["pos"], me["stats"]
+        if self.crossing is None:
+            if (not me["grounded"] or now < self.crossing_retry or me["energy"] < 52
+                    or not self.last_progress or now - self.last_progress[0] < 1.4):
+                return False, goal
+            self.crossing_retry = now + 7
+            plan = self.arena.jet_crossing(p, goal, size, stats, me["energy"], zone, deadline)
+            if plan is None:
+                return False, goal
+            landing, height = plan
+            self.crossing = (p[:2], landing, height, now, False)
+            act["jump"] = True
+            return True, p[:2]
+
+        start, landing, height, since, traversing = self.crossing
+        d = distance(p, landing)
+        if now - since > 6 or me["grounded"] and now - since > .25:
+            self.crossing = None
+            return False, goal
+        traversing = traversing or p[2] >= height - .4
+        self.crossing = start, landing, height, since, traversing
+        if not me["grounded"] and d > 1.5 and me["energy"] > 8:
+            act["boost"] = (p[2] < height + 1
+                            and jet_pulse(me["vel"][2], me["energy"], stats))
+        return True, landing if traversing or me["energy"] < 8 else start
+
     def act(self, obs):
         started = time.perf_counter()
         now, me, zone = obs["t"], obs["self"], obs["zone"]
@@ -683,6 +712,9 @@ class Bot:
                         self.recovering = True
         elif not retreat or hp > .8:
             self.refuge = None
+        if not final and not flight and (self.crossing or
+                                          (not laser_threat and distance(p, goal) > 12 and nearest > 36)):
+            flight, goal = self.cross_obstacle(act, me, goal, zone, size, now, started + .022)
         target = None
         if not flight:
             if enemies:

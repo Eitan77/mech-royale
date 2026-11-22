@@ -178,6 +178,40 @@ class Arena:
                 return False
         return True
 
+    def jet_crossing(self, p, goal, size, stats, energy, zone, deadline):
+        """Find a low ascent with a verified air lane and a clear touchdown."""
+        heading = math.atan2(goal[1] - p[1], goal[0] - p[0])
+        if stats["jet_accel"] <= stats["gravity"]:
+            return None
+        for offset in (0, .38, -.38, .75, -.75):
+            direction = heading + offset
+            for length in (14, 21, 29):
+                if time.perf_counter() > deadline:
+                    return None
+                q = p[0] + length * math.cos(direction), p[1] + length * math.sin(direction)
+                if math.dist(q, zone["center"]) > zone["radius"] - 2:
+                    continue
+                ground = self.ground(*q)
+                landing = max(ground, self.roof(*q))
+                radius, height = 2.5 * size, 9 * size
+                if not self.clear(*q, landing, radius, height) or self.walk(p[:2], q, size):
+                    continue
+                for rise in (5, 10, 17, 25):
+                    altitude = max(p[2], landing) + rise
+                    flight_time = (altitude - p[2]) / (0.72 * stats["max_rise_speed"]) + length / stats["walk_speed"] + .7
+                    if flight_time * stats["jet_drain"] > energy - 12:
+                        break
+                    if not self.air_lane(p[:2], q, altitude, size):
+                        continue
+                    if not all(self.clear(*p[:2], z, radius, height)
+                               for z in range(math.ceil(p[2]), math.ceil(altitude), 2)):
+                        break
+                    if not all(self.clear(*q, z, radius, height)
+                               for z in range(math.ceil(landing), math.ceil(altitude), 2)):
+                        continue
+                    return q, altitude
+        return None
+
     def roof_route(self, point, target, size, stats, energy, deadline):
         """Select an accessible launch surface and a clear ascent and crossing."""
         top = self.roof(*target)
