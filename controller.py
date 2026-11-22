@@ -671,7 +671,8 @@ class Bot:
                      - (24 if a.get("charging") else 0))
         visible = enemies[0] if enemies else None
         threats = [(a, 2.4 if a.get("charging") else 1.6 if "laser" in a.get("weapons", ()) else 1)
-                   for a in enemies if distance(p, a["pos"]) < 235]
+                   for a in enemies if distance(p, a["pos"]) < (
+                       280 if "laser" in a.get("weapons", ()) else 235)]
         if not threats and now - self.last_damage < 4:
             old = [(a, seen) for a, seen in self.memory["mechs"].values() if a["kind"] == "mech"]
             if old:
