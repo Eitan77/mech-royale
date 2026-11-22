@@ -998,11 +998,19 @@ class Bot:
             scavenging = self.mode == "FARM" and objective is not None and (
                 objective[0] in ("cubes", "pickups", "drop"))
             if target is None and enemies and not scavenging:
+                # Final-center contest is a territory fight: an enemy whose
+                # collision cylinder can displace us outranks distant DPS.
+                contesting = [a for a in enemies if
+                              contest_center(me,a,zone,now,retreat)]
                 candidates = sorted(enemies, key=lambda a: distance(p, a["pos"]) * .28
                              + min(40, estimates[a["id"]][0]) * 2 + min(1200, estimates[a["id"]][1]) * .02
                              - (rear_laser_bonus(a, p, self.config["sound"]["range"]["laser_charge"],
                                                  math.radians(self.config["vision"]["fov_deg"])) if kind == "laser" else 0)
                              - (55 if kind == "lightning" and a.get("charging") and distance(p, a["pos"]) < 44 else 0))
+                if contesting:
+                    candidates = (sorted(contesting,
+                        key=lambda e: distance(e["pos"],zone["next_center"]))+
+                        [e for e in candidates if e not in contesting])
                 target = next((enemy for enemy in candidates[:3] if self.arena.shot(
                     origin, (*enemy["pos"][:2], enemy["pos"][2] + 4.5 * (1 + .05 * enemy.get("cubes", 0)))
                 )), candidates[0])
