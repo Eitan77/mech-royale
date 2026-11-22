@@ -3,7 +3,7 @@ import math
 import time
 
 
-def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, deadline):
+def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, deadline, capture=None):
     p, velocity, stats = me["pos"], me["vel"], me["stats"]
     if not me["grounded"] or not threats and not projectiles:
         return move, False
@@ -45,6 +45,8 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
                 x += vx * .1
                 y += vy * .1
                 samples.append((x, y))
+            if capture and any(math.dist(point, capture["pos"][:2]) > capture["radius"] - .2 for point in samples):
+                continue
             if not arena.walk(p[:2], samples[-1], size):
                 continue
             margin = zone["radius"] - math.hypot(x - zone["center"][0], y - zone["center"][1])

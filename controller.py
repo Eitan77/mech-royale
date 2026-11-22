@@ -196,6 +196,24 @@ class Bot:
                 return q
         return None
 
+    def finish_capture(self, obs, enemies):
+        me = obs["self"]
+        for drop in obs["drops"]:
+            if drop["holder"] != me["id"] or drop["lands_in"] > 0 or not me["grounded"]:
+                continue
+            center, radius = drop["pos"], drop["radius"]
+            remaining = max(.1, drop["capture_s"] - drop["progress"])
+            if remaining > 1.5 or distance(me["pos"], center) >= radius:
+                continue
+            if any(distance(enemy["pos"], center) < radius + remaining * me["stats"]["boost_speed"] + 2
+                   for enemy in enemies):
+                continue
+            danger = sum(315 if enemy.get("charging") else 135
+                         for enemy in enemies if distance(me["pos"], enemy["pos"]) < 200)
+            if me["hp"] > danger + 75:
+                return drop
+        return None
+
     def objective(self, obs, enemies, weapon, p, zone, now, weapon_values):
         best, best_score = None, 0
         hp = obs["self"]["hp"] / obs["self"]["max_hp"]
@@ -705,18 +723,21 @@ class Bot:
             act["take"] = max(pickups, key=lambda item: weapon_values[item["kind"]])["id"]
             if second:
                 act["drop"] = slot
+        capture = self.finish_capture(obs, enemies) if not urgent and not final else None
+        if capture:
+            goal = tuple(capture["pos"][:2])
         roof = self.arena.roof(*anchor) if final else -math.inf
         flight = False
         if final:
             flight, goal = self.final_movement(act, me, threats, p, anchor, goal, roof, remain,
                                                zone, size, now, started + 0.019)
-        elif objective and objective[0] in ("cubes", "pickups") and not threats:
+        elif not capture and objective and objective[0] in ("cubes", "pickups") and not threats:
             elevated = objective[2]
             if elevated[2] - p[2] > 4 and elevated[2] - self.arena.ground(*elevated[:2]) > 4:
                 flight, goal = self.final_movement(act, me, [], p, tuple(elevated[:2]), goal,
                                                    self.arena.roof(*elevated[:2]), max(18, remain),
                                                    zone, size, now, started + .019)
-        if retreat and not final and not urgent and hp < .68 and time.perf_counter() < started + .017:
+        if not capture and retreat and not final and not urgent and hp < .68 and time.perf_counter() < started + .017:
             refuge = self.recovery_roof(me, threats, zone, size, now, started + .019)
             if refuge is not None:
                 q = tuple(refuge[:2])
@@ -733,7 +754,7 @@ class Bot:
                         self.recovering = True
         elif not retreat or hp > .8:
             self.refuge = None
-        if not final and not flight and (self.crossing or
+        if not capture and not final and not flight and (self.crossing or
                                           (not laser_threat and distance(p, goal) > 12 and nearest > 36)):
             flight, goal = self.cross_obstacle(act, me, goal, zone, size, now, started + .022)
         target = None
@@ -794,14 +815,14 @@ class Bot:
             act["move"] = [dx / divisor, dy / divisor]
         if not flight and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:
             direction, tactical_boost = choose_movement(
-                self.arena, me, zone, act["move"], threats, obs["projectiles"], size, urgent, started + 0.032
+                self.arena, me, zone, act["move"], threats, obs["projectiles"], size, urgent, started + 0.032, capture
             )
             act["move"] = list(direction)
             act["boost"] = bool(tactical_boost or urgent and d > 4 and me["energy"] > 7)
         elif not flight and urgent and me["grounded"] and d > 6 and me["energy"] > 6:
             act["boost"] = True
         charging = bool(second and second.get("charge"))
-        safe_travel = (me["grounded"] and not flight and not final and not retreat and not urgent and
+        safe_travel = (not capture and me["grounded"] and not flight and not final and not retreat and not urgent and
                        not charging and not any(act["fire"]) and nearest > 110 and now - self.last_damage > 4
                        and straight > 23 and self.arena.walk(p[:2], (
                            p[0] + act["move"][0] * 17, p[1] + act["move"][1] * 17), size))
@@ -810,7 +831,7 @@ class Bot:
             act["boost"] = True
         if retreat and not visible and not urgent and not flight and now - self.last_damage > 2.0:
             act["move"] = [value * 0.38 for value in act["move"]]
-        if me["grounded"] and d > 10 and not flight:
+        if not capture and me["grounded"] and d > 10 and not flight:
             if self.last_progress is None or distance(p, self.last_progress[1]) > 3:
                 self.last_progress = (now, p)
             elif now - self.last_progress[0] > 1 and me["energy"] > 43:
