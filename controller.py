@@ -16,6 +16,7 @@ from scoremax_v8 import (npc_pressure, immediate_npc_escape,
 from foliage_v9 import Foliage, should_ghost, stealth_vector
 from mechanics_v9 import (one_shot_laser_ambush, easy_laser_drone,
                           contest_center, storm_finish)
+from upgrade_lottery_v9 import UpgradeSculptor
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -82,7 +83,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "V9X-UpgradeLottery"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -132,6 +133,7 @@ class Bot:
         self.foliage_scan_at = -100.
         self.foliage_until = -100.
         self.foliage_active = False
+        self.sculptor = UpgradeSculptor()
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -1096,6 +1098,9 @@ class Bot:
                 self.last_progress = (now, p)
         else:
             self.last_progress = None
+        # V9X explicitly tests changing the weapon-dependent upgrade pool.
+        # Keep the gun. Temporarily drop only a safe secondary, then recover.
+        self.sculptor.apply(obs,act,nearest,urgent,self.arena)
         return act
 
 
