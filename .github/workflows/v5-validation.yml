@@ -43,7 +43,7 @@ jobs:
       - name: Verify protocol and 50ms response budget
         run: |
           python3 /tmp/mech-kit/mechfight-kit/check/check.py \
-            --map-dir /tmp/mech-kit/mechfight-kit/arena -- python3 -u controller.py
+            --map-dir /tmp/mech-kit/mechfight-kit/arena -- python3 -u placement.py
       - name: Build Docker image
         run: docker build --tag mech-v5-check .
       - name: Match sandbox conformance check
