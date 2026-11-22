@@ -129,46 +129,65 @@ class Foliage:
         return max(0.,min(1.,(minimum-1.25)/1.5))
 
     def refuge(self,me,enemies,zone,arena,deadline,limit=35.):
-        """Find an accessible concealment point in the future safe circle.
+        """Use a tree's visual *shadow*, not just its canopy center.
 
-        Restrict to at most 18 candidates / 3 enemy line tests and return
-        only a strong refuge. Called periodically, not every 100ms.
+        A ground mech can have its eyes BELOW a tree's crown yet be hidden
+        from a distant observer by standing behind it. Sample at most 42
+        points, bound work by the supplied monotonic deadline, and require
+        simultaneous middle-and-top concealment from up to three attackers.
         """
         p=me["pos"];size=1+.05*me["cubes"]
         nearby=[e for e in enemies if e.get("kind")=="mech"
                 and 48<xy(e["pos"],p)<205]
         if not nearby:return None
         nearby=sorted(nearby,key=lambda e:xy(e["pos"],p))[:3]
-        scored=[]
-        for tree in self.candidates_near(p,limit):
-            if time.perf_counter()>deadline:break
+        trees=sorted(self.candidates_near(p,limit),
+                     key=lambda tree:xy(p,tree))[:30]
+        best=None
+        bestscore=-math.inf
+        examined=0
+        for tree in trees:
+            if time.perf_counter()>deadline or examined>=42:break
             x,y,lo,hi,r,_,_,_,_=tree
             if r<3.:continue
-            q=(x,y)
-            dist=xy(p,q)
-            if dist<3. or dist>limit:continue
-            ground=arena.ground(x,y)
-            # If the crown is too low or too high relative to mech eye,
-            # it cannot hide the visible center and top.
-            if not (lo <=ground+5*size and hi>=ground+8*size):
-                continue
-            if xy(q,zone["next_center"])>zone["next_radius"]-17:
-                continue
-            if xy(q,zone["center"])>zone["radius"]-12:
-                continue
-            if any(xy(e["pos"],q)<51 for e in nearby):
-                continue
-            if not arena.clear(x,y,ground,2.5*size+.15,9*size):
-                continue
-            if not arena.walk(p[:2],q,size):
-                continue
-            conceal=min(self.concealment(e,q,ground,size) for e in nearby)
-            if conceal<.7:continue
-            # Avoid excessive detours to a soft cover spot.
-            score=80*conceal-1.65*dist-.12*xy(q,zone["next_center"])
-            scored.append((score,q,conceal))
-            if len(scored)>=18:break
-        return max(scored,key=lambda a:a[0]) if scored else None
+            nearest=nearby[0]["pos"]
+            ux,uy=x-nearest[0],y-nearest[1]
+            length=math.hypot(ux,uy)
+            if length<.01:continue
+            ux,uy=ux/length,uy/length
+            vx,vy=-uy,ux
+            # Side shadows let the mech route around solid buildings and
+            # avoid standing directly on trunks (which only block sight).
+            shadow=min(11.,r+1.7)
+            options=((x,y),
+                     (x+ux*shadow,y+uy*shadow),
+                     (x+ux*shadow+vx*2.2,y+uy*shadow+vy*2.2),
+                     (x+ux*shadow-vx*2.2,y+uy*shadow-vy*2.2))
+            for q in options:
+                if time.perf_counter()>deadline or examined>=42:break
+                examined+=1
+                d=xy(p,q)
+                if d<3. or d>limit:continue
+                if xy(q,zone["next_center"])>zone["next_radius"]-17:
+                    continue
+                if xy(q,zone["center"])>zone["radius"]-12:
+                    continue
+                if any(xy(e["pos"],q)<51 for e in nearby):
+                    continue
+                ground=arena.ground(*q)
+                if hi<ground+6*size or lo>ground+9.5*size:
+                    continue
+                if not arena.clear(q[0],q[1],ground,2.5*size+.15,9*size):
+                    continue
+                if not arena.walk(p[:2],q,size):
+                    continue
+                conceal=min(self.concealment(e,q,ground,size) for e in nearby)
+                if conceal<.70:continue
+                score=80*conceal-1.65*d-.12*xy(q,zone["next_center"])
+                if score>bestscore:
+                    best,bestscore=(score,q,conceal),score
+        return best
+
 
 def should_ghost(now,last_enemy_seen,last_damage,zone,me):
     """After last enemy sight, preserve five-second tracking expiration."""
