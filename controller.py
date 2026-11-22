@@ -3,6 +3,7 @@ import math
 import time
 
 from arena import Arena
+from firing import shot_connects
 from pilot import choose_movement
 from storm_tactics import mortar_shot, storm_screen
 import mechfight as mf
@@ -218,7 +219,9 @@ class Bot:
         size = 1 + 0.05 * actor.get("cubes", 0)
         height = {"mech": 4.5 * size, "npc": self.config["npc"]["height"] * 0.5, "crate": 0.8}[kind]
         body = (p[0], p[1], p[2] + height)
-        lead = intercept(origin, body, actor.get("vel", (0, 0, 0)), stats["speed"])
+        velocity = actor.get("vel", (0, 0, 0))
+        shifted = tuple(body[i] + .05 * velocity[i] for i in range(3))
+        lead = intercept(origin, shifted, velocity, stats["speed"])
         return body, lead
 
     def combat(self, act, obs, origin, target, retreat, urgent, final, primary_threat):
@@ -235,20 +238,25 @@ class Bot:
         body, lead = self.gun_solution(origin, target, gun["stats"] if gun else self.config["weapons"]["gun"])
         laser = secondary and secondary["kind"] == "laser"
         lightning = secondary and secondary["kind"] == "lightning"
-        aim_point = body if laser and (charge or not retreat and secondary["cooldown"] <= 0.15) else lead
-        if lightning and d < secondary["stats"]["range"] - 1 and not gun:
+        aim_point = body if laser and (charge or not (retreat or urgent or final) and secondary["cooldown"] <= 0.15) else lead
+        if lightning and d < secondary["stats"]["range"] - 1 and (not gun or target.get("charging")):
             aim_point = body
         yaw = bearing(origin, aim_point)
         pitch = math.atan2(aim_point[2] - origin[2], distance(origin, aim_point))
         act["aim"] = [yaw, max(cfg["min_pitch"], min(cfg["max_pitch"], pitch))]
         error = angle_delta(yaw, me["aim"][0])
-        pitch_error = abs(pitch - me["aim"][1])
         allowed_pitch = cfg["min_pitch"] <= pitch <= cfg["max_pitch"]
-        hit_tolerance = max(0.019, min(0.38, 2.3 / max(1, d)))
-        if target.get("kind") == "mech":
-            hit_tolerance *= 1 + 0.05 * target.get("cubes", 0)
-        aligned = max(error, pitch_error) < hit_tolerance and allowed_pitch
         clear = allowed_pitch and self.arena.shot(origin, aim_point)
+        kind = target.get("kind", "crate")
+        scale = 1 + self.config["cubes"]["size_per_cube"] * target.get("cubes", 0)
+        radius, height = {
+            "mech": (cfg["radius"] * scale, cfg["height"] * scale),
+            "npc": (self.config["npc"]["radius"], self.config["npc"]["height"]),
+            "crate": (1.15, 1.6),
+        }[kind]
+        aligned = bool(laser and error < .3 and shot_connects(
+            self.arena, origin, me, act["aim"], target, secondary, radius, height
+        ))
         finishing = target.get("kind") == "mech" and target.get("hp", 1400) < 145 and d < 60
         is_rear_duel = target.get("kind") == "mech" and angle_delta(target["aim"][0], bearing(target["pos"], origin)) > 2.0
         offensive = not (urgent or final) and (not retreat or is_rear_duel) or finishing
@@ -256,20 +264,18 @@ class Bot:
         # Running and firing the arm gun are independent. Only preserve silence
         # for an actual disengagement or committed final-circle recovery.
         return_fire = is_mech and (not final or urgent) and d < 225
-        if gun and aim_point != lead:
-            gun_yaw = bearing(origin, lead)
-            gun_pitch = math.atan2(lead[2] - origin[2], distance(origin, lead))
-            gun_aligned = max(angle_delta(gun_yaw, me["aim"][0]), abs(gun_pitch - me["aim"][1])) < hit_tolerance
-            gun_clear = gun_aligned and self.arena.shot(origin, lead)
-        else:
-            gun_aligned, gun_clear = aligned, clear
+        gun_clear = clear if aim_point == lead else self.arena.shot(origin, lead)
+        gun_aligned = bool(gun and gun.get("reload", 0) <= .1 and gun["cooldown"] <= .11
+                           and (gun_clear or d < 35)
+                           and shot_connects(self.arena, origin, me, act["aim"], target, gun, radius, height))
         mortar = next((w for w in me["weapons"] if w and w["kind"] == "mortar"), None)
         zone = obs["zone"]
         outward = abs(distance(target["pos"], zone["center"]) - zone["radius"]) < 13
         mortar_aim = None
         if (mortar and is_mech and not urgent and "laser" not in target.get("weapons", ())
                 and (outward or not gun_clear and not retreat) and d < 145 and mortar["cooldown"] <= .35):
-            mortar_aim = mortar_shot(self.arena, origin, target["pos"], target["vel"], mortar["stats"], zone, outward)
+            mortar_aim = mortar_shot(self.arena, (*origin[:2], me["pos"][2] + me["stats"]["height"] + .5),
+                                     target["pos"], target["vel"], mortar["stats"], zone, outward)
             if mortar_aim and cfg["min_pitch"] <= mortar_aim[1] <= cfg["max_pitch"]:
                 act["aim"] = list(mortar_aim)
                 gun_aligned = False
@@ -280,15 +286,17 @@ class Bot:
                 continue
             kind, stats = weapon["kind"], weapon["stats"]
             if kind == "gun":
-                act["fire"][i] = bool((offensive or return_fire) and gun_aligned and gun_clear and d < stats["range"] - 3)
+                act["fire"][i] = bool((offensive or return_fire) and gun_aligned)
             elif kind == "mortar" and mortar_aim:
                 act["fire"][i] = angle_delta(mortar_aim[0], me["aim"][0]) < .035 and abs(mortar_aim[1] - me["aim"][1]) < .023
             elif kind == "lightning":
                 short = target.get("charging", False) and "laser" in target.get("weapons", ())
                 reserve = 18 if retreat else 12
-                act["fire"][i] = bool((offensive or return_fire or short) and error < math.radians(stats["cone_deg"]) * 0.38
-                                      and d < stats["range"] - 0.5 and self.arena.shot(origin, body)
-                                      and me["energy"] > stats["energy"] + (3 if short else reserve))
+                eligible = ((offensive or return_fire or short) and d < stats["range"]
+                            and weapon["cooldown"] <= .11 and
+                            me["energy"] > stats["energy"] + (3 if short else reserve))
+                if eligible:
+                    act["fire"][i] = self.lightning_connects(obs, origin, target, stats)
             elif kind == "laser":
                 same_target = self.laser_target == target["id"]
                 if charge:
@@ -303,6 +311,34 @@ class Bot:
                         self.laser_target = target["id"]
         if gun and gun.get("ammo", 0) <= 4 and (not gun_clear or not is_mech) and not any(act["fire"]):
             act["reload"] = True
+
+    def lightning_connects(self, obs, origin, target, stats):
+        # An intervening crate or drone consumes the first arc. Only spend
+        # energy when the intended target can still receive a useful chain.
+        turn = obs["self"]["stats"]["turn_rate"] * .05
+        current = obs["self"]["aim"][0]
+        desired = bearing(origin, target["pos"])
+        yaw = current + max(-turn, min(turn, math.remainder(desired - current, math.tau)))
+        cone = math.radians(stats["cone_deg"]) * .5
+        if angle_delta(yaw, desired) > cone or distance(origin, target["pos"]) > stats["range"]:
+            return False
+        end = self.gun_solution(origin, target, self.config["weapons"]["gun"])[0]
+        if not self.arena.shot(origin, end):
+            return False
+        nearer = []
+        distance_to_target = distance(origin, target["pos"])
+        for item in (*obs["mechs"], *obs["crates"]):
+            if item["id"] == target["id"]:
+                continue
+            d = distance(origin, item["pos"])
+            if d < distance_to_target and angle_delta(bearing(origin, item["pos"]), yaw) <= cone:
+                point = self.gun_solution(origin, item, self.config["weapons"]["gun"])[0]
+                if self.arena.shot(origin, point):
+                    nearer.append((d, point))
+        if not nearer:
+            return True
+        first = min(nearer)[1]
+        return stats["chain"] > 0 and math.dist(first, end) < stats["chain_range"] and self.arena.shot(first, end)
 
     def final_movement(self, act, me, threats, p, anchor, goal, roof, remain, zone, size, now, deadline):
         stats = me["stats"]
@@ -524,11 +560,14 @@ class Bot:
         target = None
         if not flight:
             if enemies:
-                target = min(enemies, key=lambda a: distance(p, a["pos"]) * 0.28
+                candidates = sorted(enemies, key=lambda a: distance(p, a["pos"]) * 0.28
                              + min(40, estimates[a["id"]][0]) * 2 + min(1200, estimates[a["id"]][1]) * 0.02
                              - (rear_laser_bonus(a, p, self.config["sound"]["range"]["laser_charge"],
                                                  math.radians(self.config["vision"]["fov_deg"])) if kind == "laser" else 0)
                              - (55 if kind == "lightning" and a.get("charging") and distance(p, a["pos"]) < 44 else 0))
+                target = next((enemy for enemy in candidates[:3] if self.arena.shot(
+                    origin, (*enemy["pos"][:2], enemy["pos"][2] + 4.5 * (1 + .05 * enemy.get("cubes", 0)))
+                )), candidates[0])
             if objective and objective[0] in ("mechs", "crates") and (not target or nearest > 120 and not laser_threat):
                 group, ident, _ = objective
                 resource = next((a for a in obs[group] if a["id"] == ident), None)
