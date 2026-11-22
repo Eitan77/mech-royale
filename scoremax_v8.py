@@ -166,7 +166,7 @@ def laser_ambush(me,target,all_enemies,zone,now,alive):
 def upgrade_scoremax(choices,me,now,zone):
     """Stage-aware upgrades: regen early, final HP bank and storm endurance late."""
     hp=me["hp"]/max(1,me["max_hp"])
-    has={w["kind"] for w in me["weapons"] if w}
+    has={w["kind"] for w in me.get("weapons",()) if w}
     late=(now>=285 or zone["next_radius"]<=70)
     very_late=(now>=350 or zone["next_radius"]<=25)
     scores={
