@@ -53,7 +53,9 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
     current_margin = zone["radius"] - math.hypot(p[0] - zone["center"][0], p[1] - zone["center"][1])
     circles = forecast_circles(zone, now)
     for dx, dy in options:
-        for boost in (False, True) if (urgent or incoming) and me["energy"] > 21 and mag > 0.1 else (False,):
+        # Charging laser threats warrant an emergency burst even before
+        # a projectile exists; predict the earliest path behind hard cover.
+        for boost in (False, True) if (urgent or incoming or charger is not None) and me["energy"] > 21 and mag > 0.1 else (False,):
             if time.perf_counter() >= deadline:
                 return best
             speed = stats["boost_speed"] if boost else stats["walk_speed"]
