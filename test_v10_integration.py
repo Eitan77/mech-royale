@@ -146,6 +146,27 @@ class Tests(unittest.TestCase):
         self.assertEqual(bot.mode,"HEAL")
         self.assertTrue(bot.recovering)
 
+    def test_active_own_laser_charge_prevents_false_silent_hide(self):
+        bot,o=self.start()
+        self.give_laser(o,charge=.35)
+        o["self"]["hp"]=650
+        p=o["self"]["pos"]
+        o["zone"].update(center=p[:2],radius=560.,
+                         next_center=p[:2],next_radius=380.,
+                         shrink_start=60.,shrink_end=110.,dps=20.)
+        o["t"]=25
+        o["mechs"]=[self.target(o,125,math.pi,1200)]
+        bot.arena.shot=lambda *args:True
+        bot.arena.walk=lambda *args:True
+        bot.cover_point=lambda *args:None
+        bot.foliage.refuge=lambda *args:(100.,(p[0],p[1]+18),.9)
+        bot.danger_cache={"exposed":0,"near":0,"lasers":0,
+                          "charging":0,"closest":125}
+        bot.danger_update=o["t"]
+        bot.act(o)
+        self.assertFalse(bot.foliage_active,
+                         "Entering ghost mode would release the active laser")
+
     def test_laser_ambush_only_on_true_one_shot(self):
         bot,o=self.start()
         self.give_laser(o)
