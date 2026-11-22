@@ -506,8 +506,14 @@ class Bot:
                     # A charged laser held while the aim slews is preferable to
                     # accidentally releasing an unaligned shot.
                     max_hold = stats["charge"] + min(1.2, stats.get("hold_s", 2.0) - 0.25)
+                    # A 3-cube laser needs its FULL 0.75s charge to deliver
+                    # 352.8 damage to a 350HP drone. Releasing at 0.70s
+                    # leaves it alive, triggers retaliation, and wastes the
+                    # one-shot resource snowball opportunity.
+                    full_required = bool(one_shot_resource or ambush)
+                    release_at = stats["charge"] if full_required else stats["charge"] - .05
                     act["fire"][i] = bool(offensive and same_target and clear and (
-                        charge < stats["charge"] - 0.05 or
+                        charge < release_at or
                         (not aligned and charge < max_hold)
                     ))
                 else:
