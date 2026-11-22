@@ -208,4 +208,21 @@ class Tests(unittest.TestCase):
                         act = bot.act(obs)
                     self.assertGreater(toward * act["move"][0], .25)
 
+    def test_supply_capture_commits_early_only_when_survivable(self):
+        bot, obs = self.start()
+        me = obs["self"]
+        me.update(hp=me["max_hp"], grounded=True)
+        drop = {"id": 20000, "pos": me["pos"], "holder": me["id"],
+                "radius": 8., "lands_in": 0., "capture_s": 4., "progress": .5}
+        obs["drops"] = [drop]
+        enemy = self.target(obs, 130)
+        bot.arena.shot = lambda *args: True
+        self.assertIs(bot.finish_capture(obs, [enemy]), drop)
+        me["hp"] = 300
+        self.assertIsNone(bot.finish_capture(obs, [enemy]))
+        bot.arena.shot = lambda *args: False
+        self.assertIs(bot.finish_capture(obs, [enemy]), drop)
+        enemy["pos"][0] = me["pos"][0] + 60
+        self.assertIsNone(bot.finish_capture(obs, [enemy]))
+
 if __name__=="__main__":unittest.main()

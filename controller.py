@@ -229,19 +229,41 @@ class Bot:
 
     def finish_capture(self, obs, enemies):
         me = obs["self"]
+        if not me["grounded"]:
+            return None
+        weapons = self.config["weapons"]
         for drop in obs["drops"]:
-            if drop["holder"] != me["id"] or drop["lands_in"] > 0 or not me["grounded"]:
+            if drop["holder"] not in (None, me["id"]) or drop["lands_in"] > 0:
                 continue
             center, radius = drop["pos"], drop["radius"]
-            remaining = max(.1, drop["capture_s"] - drop["progress"])
-            if remaining > 1.5 or distance(me["pos"], center) >= radius:
+            if distance(me["pos"], center) >= radius - .2:
                 continue
-            if any(distance(enemy["pos"], center) < radius + remaining * me["stats"]["boost_speed"] + 2
+            progress = drop["progress"] if drop["holder"] == me["id"] else 0
+            remaining = max(.1, drop["capture_s"] - progress)
+            # Allow for opponents with upgraded boost speed.
+            if any(distance(enemy["pos"], center) < radius + remaining * 26 + 2
                    for enemy in enemies):
                 continue
-            danger = sum(315 if enemy.get("charging") else 135
-                         for enemy in enemies if distance(me["pos"], enemy["pos"]) < 200)
-            if me["hp"] > danger + 75:
+            danger = 0.0
+            p = me["pos"]
+            body = (*p[:2], p[2] + .5 * me["stats"]["height"])
+            for enemy in enemies:
+                reach = distance(p, enemy["pos"])
+                if reach > weapons["laser"]["range"] or not self.arena.shot(
+                    (*enemy["pos"][:2], enemy["pos"][2] + 7 * (1 + .05 * enemy["cubes"])), body,
+                ):
+                    continue
+                incoming = 0.0
+                for kind in enemy["weapons"]:
+                    weapon = weapons[kind]
+                    if kind in ("gun", "lightning") and reach <= weapon["range"]:
+                        incoming += weapon["damage"] * math.ceil(remaining / weapon["cooldown"])
+                    elif kind == "laser" and (enemy["charging"] or remaining >= weapon["charge"]):
+                        incoming += weapon["damage"] * (1 + int(remaining / (weapon["charge"] + weapon["cooldown"])))
+                    elif kind == "mortar" and reach < 170:
+                        incoming += weapon["damage"] + weapon["splash"]
+                danger += incoming * (1 + .04 * min(10, enemy["cubes"]))
+            if me["hp"] > danger + 125:
                 return drop
         return None
 
@@ -989,6 +1011,7 @@ class Bot:
         capture = self.finish_capture(obs, enemies) if not urgent and not final else None
         if capture:
             goal = tuple(capture["pos"][:2])
+            self.foliage_active = False
         roof = self.arena.roof(*anchor) if final else -math.inf
         flight = False
         if final:
