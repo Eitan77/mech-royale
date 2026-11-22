@@ -84,7 +84,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "V18 Laser Denial"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -135,6 +135,8 @@ class Bot:
         self.foliage_until = -100.
         self.foliage_active = False
         self.ambush_target_id = None
+        self.laser_shelter = None
+        self.laser_shelter_scan = -100.
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -193,6 +195,46 @@ class Bot:
                     best, best_score = q, score
         self.cover = best
         return best
+
+    def laser_escape(self, me, shooter, zone, size, now, deadline):
+        """Reach solid shadow before the first charge, then recheck the lane."""
+        p = me["pos"]
+        future = project_position(shooter["pos"], shooter["vel"], .75)
+        height = 7 * (1 + .05 * shooter.get("cubes", 0))
+        muzzle = (*shooter["pos"][:2], shooter["pos"][2] + height)
+        future_muzzle = (*future[:2], future[2] + height)
+
+        def sheltered(q):
+            floor = self.arena.ground(*q)
+            return (not self.arena.shot(muzzle, (*q, floor + 5 * size)) and
+                    not self.arena.shot(future_muzzle, (*q, floor + 8 * size)))
+
+        if self.laser_shelter is not None:
+            saved_id, q, expires = self.laser_shelter
+            if saved_id == shooter["id"] and now < expires and sheltered(q):
+                return q
+            self.laser_shelter = None
+        if now - self.laser_shelter_scan < .45:
+            return None
+        self.laser_shelter_scan = now
+        best = None
+        # If already concealed, do not wait in the open after changing aim.
+        offsets = ((0., 0.), *((dx * radius, dy * radius) for radius in (8, 15, 23, 33) for dx, dy in ANGLES))
+        for dx, dy in offsets:
+            if time.perf_counter() >= deadline:
+                break
+            q = p[0] + dx, p[1] + dy
+            if (distance(q, zone["center"]) > zone["radius"] - 10 or
+                    distance(q, shooter["pos"]) < 46 or not sheltered(q) or
+                    not self.arena.walk(p[:2], q, size)):
+                continue
+            cost = math.hypot(dx, dy) + .09 * distance(q, zone["next_center"])
+            if best is None or cost < best[0]:
+                best = cost, q
+        if best:
+            self.laser_shelter = shooter["id"], best[1], now + 4.5
+            return best[1]
+        return None
 
     def recovery_roof(self, me, threats, zone, size, now, deadline):
         p = me["pos"]
@@ -519,7 +561,7 @@ class Bot:
             elif kind == "lightning":
                 short_left = self.shorted_until.get(target["id"], -100) - obs["t"]
                 short = ("laser" in target.get("weapons", ())
-                         and (target.get("charging", False) or -.4 < short_left <= .22))
+                         and (target.get("charging", False) or short_left <= .22))
                 reserve = 18 if retreat else 12
                 eligible = (not self.recovering and (offensive or return_fire or short) and d < stats["range"]
                             and weapon["cooldown"] <= .11 and
@@ -1014,6 +1056,31 @@ class Bot:
             if second:
                 act["drop"] = slot
         capture = self.finish_capture(obs, enemies) if not urgent and not final else None
+        laser_escape = False
+        if (not capture and not urgent and not final and now < 125 and not own_laser_charging
+                and not attacking_npcs and time.perf_counter() < started + .019):
+            shooter = next((enemy for enemy in enemies if "laser" in enemy.get("weapons", ())
+                            and distance(p, enemy["pos"]) < 225), None)
+            if shooter is not None:
+                arc = second if kind == "lightning" and me["energy"] > 32 else None
+                reach = distance(p, shooter["pos"])
+                if (arc and not shooter["charging"] and len(threats) == 1 and hp > .58
+                        and reach < arc["stats"]["range"] + 14):
+                    if self.arena.walk(p[:2], shooter["pos"][:2], size):
+                        objective = None
+                        self.recovering = False
+                        self.mode = "FIGHT"
+                        retreat = False
+                        if reach > .76 * arc["stats"]["range"]:
+                            goal = shooter["pos"][:2]
+                elif reach > 50 and me["grounded"]:
+                    shelter = self.laser_escape(me, shooter, zone, size, now, started + .024)
+                    if shelter is not None:
+                        laser_escape = True
+                        goal, objective = shelter, None
+                        self.foliage_active = False
+                        retreat = True
+                        self.recovering = distance(p, shelter) < 2
         if capture:
             goal = tuple(capture["pos"][:2])
             self.foliage_active = False
@@ -1028,7 +1095,7 @@ class Bot:
                 flight, goal = self.final_movement(act, me, [], p, tuple(elevated[:2]), goal,
                                                    self.arena.roof(*elevated[:2]), max(18, remain),
                                                    zone, size, now, started + .019)
-        if (not capture and not self.foliage_active and retreat and
+        if (not capture and not laser_escape and not self.foliage_active and retreat and
                 not final and not urgent and hp<.68 and
                 time.perf_counter()<started+.017):
             refuge = self.recovery_roof(me, threats, zone, size, now, started + .019)
@@ -1047,7 +1114,7 @@ class Bot:
                         self.recovering = True
         elif not retreat or hp > .8:
             self.refuge = None
-        if not capture and not final and not flight and (self.crossing or
+        if not capture and not laser_escape and not final and not flight and (self.crossing or
                                           (not laser_threat and distance(p, goal) > 12 and nearest > 36)):
             flight, goal = self.cross_obstacle(act, me, goal, zone, size, now, started + .022)
         target = None
@@ -1101,6 +1168,9 @@ class Bot:
         self.combat(act, obs, origin, target, retreat, urgent,
                     final and (hp < .86 or remain < 12) and
                     (not target or target.get("kind") != "npc"), priority_enemy)
+        if laser_escape:
+            act["fire"] = [False, False]
+            act["reload"] = False
         if (self.foliage_active and nearest>100 and
                 not danger.get("charging") and not attacking_npcs):
             # No weapon report may betray our silent canopy retreat.
@@ -1170,6 +1240,8 @@ class Bot:
                            p[0] + act["move"][0] * 17, p[1] + act["move"][1] * 17), size))
         reserve = energy_floor(me)
         if self.ground_boost.active(now, me["energy"], stats, reserve, safe_travel):
+            act["boost"] = True
+        if laser_escape and d > 8 and me["energy"] > 16:
             act["boost"] = True
         # Canopy approach: move quickly into optical cover, then stay silent
         # for the five-second shared tracking window. Do not fire/reload/
