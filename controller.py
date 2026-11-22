@@ -981,6 +981,7 @@ class Bot:
         if (self.shadow_goal is not None and now<self.shadow_until and
                 not urgent and not final and not own_laser_charging and
                 nearest>44 and not attacking_npcs and
+                (hp<.92 or now-self.last_enemy_seen<5.6) and
                 hold_shadow(me,self.shadow_goal,enemies,zone,self.arena,
                             started+.017)):
             self.shadow_active=True
@@ -996,7 +997,8 @@ class Bot:
                 me,enemies,zone,self.arena,now,started+.027)
             if candidate is not None:
                 self.shadow_goal=candidate[0]
-                self.shadow_until=now+7.2
+                regen_time=(me["max_hp"]-me["hp"])/max(1.,stats["regen_per_s"])
+                self.shadow_until=now+min(26.,5.5+regen_time)
                 self.shadow_active=True
         if self.shadow_active:
             self.foliage_active=False
@@ -1040,6 +1042,10 @@ class Bot:
             if second:
                 act["drop"] = slot
         capture = self.finish_capture(obs, enemies) if not urgent and not final else None
+        # Finish a nearly completed full-heal drop, but otherwise don't
+        # abandon a newly chosen hard-cover survival route.
+        if self.shadow_active and capture and capture["capture_s"]-capture["progress"]>0.8:
+            capture=None
         if capture:
             goal = tuple(capture["pos"][:2])
         roof = self.arena.roof(*anchor) if final else -math.inf
@@ -1053,7 +1059,8 @@ class Bot:
                 flight, goal = self.final_movement(act, me, [], p, tuple(elevated[:2]), goal,
                                                    self.arena.roof(*elevated[:2]), max(18, remain),
                                                    zone, size, now, started + .019)
-        if (not capture and not self.foliage_active and retreat and
+        if (not capture and not self.foliage_active and
+                not self.shadow_active and retreat and
                 not final and not urgent and hp<.68 and
                 time.perf_counter()<started+.017):
             refuge = self.recovery_roof(me, threats, zone, size, now, started + .019)
@@ -1072,7 +1079,7 @@ class Bot:
                         self.recovering = True
         elif not retreat or hp > .8:
             self.refuge = None
-        if not capture and not final and not flight and (self.crossing or
+        if not capture and not final and not flight and not self.shadow_active and (self.crossing or
                                           (not laser_threat and distance(p, goal) > 12 and nearest > 36)):
             flight, goal = self.cross_obstacle(act, me, goal, zone, size, now, started + .022)
         target = None
