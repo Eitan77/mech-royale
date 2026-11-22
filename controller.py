@@ -11,6 +11,8 @@ from mobility import GroundBoost, defensive_yaw, jet_pulse, project_ascent, rear
 from tactics_v5 import (classify_danger, next_mode, candidate_resource_target,
                         energy_floor, zone_eta, should_commit_resource,
                         should_skirmish)
+from scoremax_v8 import (npc_pressure, immediate_npc_escape,
+                         upgrade_scoremax)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -119,6 +121,8 @@ class Bot:
         self.danger_update = -100.0
         self.zone_eta_cache = (None, -100.0)
         self.last_enemy_seen = -100.0
+        self.last_npc_damage = -100.0
+        self.last_npc_attacker = None
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -134,6 +138,10 @@ class Bot:
             kind = event["type"]
             if kind == "damaged":
                 self.last_damage = now
+                if (event.get("weapon") == "npc" or
+                        event.get("by") is not None and event["by"] >= 100):
+                    self.last_npc_damage = now
+                    self.last_npc_attacker = event.get("by")
                 if event.get("bearing") is not None:
                     self.damage_bearing = event["bearing"]
             elif kind == "hit":
@@ -672,9 +680,13 @@ class Bot:
         enemies.sort(key=lambda a: distance(p, a["pos"]) - (28 if "laser" in a.get("weapons", ()) else 0)
                      - (24 if a.get("charging") else 0))
         visible = enemies[0] if enemies else None
+        attacking_npcs = npc_pressure(me, obs["mechs"], self.arena, now,
+                                     self.last_npc_damage, self.last_npc_attacker)
         threats = [(a, 2.4 if a.get("charging") else 1.6 if "laser" in a.get("weapons", ()) else 1)
                    for a in enemies if distance(p, a["pos"]) < (
                        280 if "laser" in a.get("weapons", ()) else 235)]
+        for npc in attacking_npcs[:3]:
+            threats.append((npc,.9))
         if not threats and now - self.last_damage < 4:
             old = [(a, seen) for a, seen in self.memory["mechs"].values() if a["kind"] == "mech"]
             if old:
@@ -744,6 +756,13 @@ class Bot:
                              self.last_damage, self.last_hit,
                              has_objective=self.resource_lock is not None,
                              has_cover=danger["exposed"] == 0)
+        # Keep V5's more aggressive, higher-scoring baseline. Only override
+        # when a nearby NPC would continually reset the regeneration timer.
+        if attacking_npcs and not urgent:
+            if hp < .72:
+                new_mode="EVADE"
+            elif not enemies and hp > .78:
+                new_mode="FIGHT"
         if new_mode != self.mode:
             self.mode, self.mode_since = new_mode, now
         retreat = self.mode in ("EVADE", "HEAL")
@@ -770,7 +789,8 @@ class Bot:
                 if allowed:
                     goal = min(allowed, key=lambda q: distance(q, anchor) * 0.85
                                - 0.95 * distance(q, visible["pos"]) - (6 if q == options[0] and laser_threat else 0))
-        elif (not urgent and not final and self.mode in ("TRAVEL", "FARM") and
+        elif (not urgent and not final and not (obs["alive"]<=6 and now>220)
+              and self.mode in ("TRAVEL","FARM") and
               (danger["exposed"] == 0 or
                danger["exposed"] == 1 and nearest > 130 and not laser_threat and hp > .8) and
               time.perf_counter() < started + 0.013):
@@ -787,7 +807,8 @@ class Bot:
                 phase = int(now / 9) * 2.399963 + me["id"]
                 radius = min(75, zone["next_radius"] * 0.48)
                 goal = (cx + math.cos(phase) * radius, cy + math.sin(phase) * radius)
-        if should_skirmish(self.mode, visible, retreat, urgent, final, nearest):
+        if (should_skirmish(self.mode, visible, retreat, urgent, final, nearest)
+                and not attacking_npcs):
             # Fight while moving across the enemy's aim, with an outward bias
             # against short-range weapons and an inward bias with our lightning.
             enemy_pos = visible["pos"]
@@ -802,6 +823,11 @@ class Bot:
                 if distance(q, zone["center"]) < zone["radius"] - 18 and self.arena.walk(p[:2], q, size):
                     goal = q
                     break
+        if retreat and attacking_npcs and not urgent and not final:
+            escape = immediate_npc_escape(me, attacking_npcs[0],
+                                          zone, self.arena, size)
+            if escape is not None:
+                goal = escape
         if retreat and not urgent and not final and hp > .38 and nearest > 23:
             safe_cubes = [cube["pos"] for cube in obs["cubes"]
                           if 3 < distance(p, cube["pos"]) < 9 and abs(p[2] - cube["pos"][2]) < 3.8
@@ -810,7 +836,7 @@ class Bot:
                           and self.arena.walk(p[:2], cube["pos"][:2], size)]
             if safe_cubes:
                 goal = min(safe_cubes, key=lambda q: distance(q, p))[:2]
-        if retreat and visible and not urgent and not final and objective is None and time.perf_counter() < started + .014:
+        if retreat and visible and not attacking_npcs and not urgent and not final and objective is None and time.perf_counter() < started + .014:
             screened = storm_screen(self.arena, p, visible, zone, size, started + .016)
             if screened is not None:
                 goal = screened
@@ -820,7 +846,7 @@ class Bot:
                           "lightning_range": 70, "gun_damage": 65, "laser_charge": 66, "capacitor": 65,
                           "reactor": 60, "sensors": 49, "gyros": 48, "laser_damage": 62, "gun_rate": 59}
             choices = obs["offer"]["choices"]
-            act["pick"] = max(range(len(choices)), key=lambda i: priorities.get(choices[i]["id"], 40))
+            act["pick"] = upgrade_scoremax(choices, me, now, zone)
         pickups = [item for item in obs["pickups"] if distance(p, item["pos"]) < self.config["loot"]["pickup_radius"] - 0.1
                    and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
         if kind == "mortar" and laser_threat and not pickups:
@@ -893,7 +919,8 @@ class Bot:
             if target is None and objective and objective[0] in ("mechs", "crates"):
                 target = candidate_resource_target(objective, obs)
             if target is None and not scavenging and (not final or remain > 18):
-                nuisance = [a for a in obs["mechs"] if a["kind"] == "npc" and distance(a["pos"], p) < 43]
+                nuisance = [a for a in obs["mechs"] if a["kind"] == "npc"
+                            and distance(a["pos"], p) < (65 if attacking_npcs else 43)]
                 if nuisance:
                     target = min(nuisance, key=lambda a: distance(p, a["pos"]))
         priority_enemy = None if (target is not None and target.get("kind") in ("npc", "crate")
