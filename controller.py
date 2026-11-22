@@ -308,9 +308,12 @@ class Bot:
                 if score > best_score:
                     best, best_score = (group, ident, q), score
         self.loot_goal = best[1] if best else None
-        if best is not None:
+        # Supply drops are not in self.memory; never lock a non-memory group.
+        if best is not None and best[0] in self.memory:
             self.resource_lock = best
             self.resource_lock_at = now
+        else:
+            self.resource_lock = None
         return best
 
     def resource_waypoint(self, p, target, group, size, stats, deadline):
@@ -761,7 +764,9 @@ class Bot:
                 if allowed:
                     goal = min(allowed, key=lambda q: distance(q, anchor) * 0.85
                                - 0.95 * distance(q, visible["pos"]) - (6 if q == options[0] and laser_threat else 0))
-        elif not urgent and not final and time.perf_counter() < started + 0.013:
+        elif (not urgent and not final and
+              (danger["exposed"] == 0 or danger["exposed"] == 1 and nearest > 90) and
+              time.perf_counter() < started + 0.013):
             objective = self.objective(obs, enemies, kind, p, zone, now, weapon_values)
             if objective:
                 self.mode = "FARM"
