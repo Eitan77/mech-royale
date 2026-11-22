@@ -8,6 +8,8 @@ from pilot import choose_movement
 from storm_tactics import mortar_shot, storm_screen
 import mechfight as mf
 from mobility import GroundBoost, defensive_yaw, jet_pulse, project_ascent, rear_laser_bonus
+from tactics_v5 import (classify_danger, next_mode, candidate_resource_target,
+                        energy_floor, zone_eta, should_commit_resource)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -108,6 +110,14 @@ class Bot:
         self.refuge = None
         self.refuge_scan = -100
         self.recovering = False
+        self.mode = "TRAVEL"
+        self.mode_since = 0.0
+        self.resource_lock = None
+        self.resource_lock_at = -100.0
+        self.danger_cache = None
+        self.danger_update = -100.0
+        self.zone_eta_cache = (None, -100.0)
+        self.last_enemy_seen = -100.0
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -215,6 +225,22 @@ class Bot:
         return None
 
     def objective(self, obs, enemies, weapon, p, zone, now, weapon_values):
+        # Stay committed to a safe resource; recheck that it is still visible
+        # or otherwise known to exist before carrying a stale objective.
+        if self.resource_lock is not None:
+            group, ident, _ = self.resource_lock
+            entry = self.memory[group].get(ident)
+            available = entry is not None and (
+                group not in ("crates", "mechs") or
+                any(a["id"] == ident for a in obs[group]))
+            risk = any(distance(p, e["pos"]) < 35 and e.get("charging")
+                       for e in enemies)
+            if should_commit_resource(now, self.resource_lock_at, available, risk):
+                item, _ = entry
+                if distance(p, item["pos"]) < 130:
+                    self.loot_goal = ident
+                    return group, ident, item["pos"]
+            self.resource_lock = None
         best, best_score = None, 0
         hp = obs["self"]["hp"] / obs["self"]["max_hp"]
         stats = obs["self"]["stats"]
@@ -282,6 +308,9 @@ class Bot:
                 if score > best_score:
                     best, best_score = (group, ident, q), score
         self.loot_goal = best[1] if best else None
+        if best is not None:
+            self.resource_lock = best
+            self.resource_lock_at = now
         return best
 
     def resource_waypoint(self, p, target, group, size, stats, deadline):
@@ -357,11 +386,13 @@ class Bot:
         is_rear_duel = target.get("kind") == "mech" and angle_delta(target["aim"][0], bearing(target["pos"], origin)) > 2.0
         offensive = not (urgent or final) and (not retreat or is_rear_duel) or finishing
         is_mech = target.get("kind") == "mech"
-        if self.recovering and not finishing:
+        if self.recovering:
+            # Avoid dealing damage during genuine escape/heal phases:
+            # one successful shot resets the five-second regen timer.
             offensive = False
         # Running and firing the arm gun are independent. Only preserve silence
         # for an actual disengagement or committed final-circle recovery.
-        return_fire = is_mech and (not final or urgent) and d < 225 and (not self.recovering or finishing)
+        return_fire = is_mech and (not final or urgent) and d < 225 and not self.recovering
         gun_clear = clear if aim_point == lead else self.arena.shot(origin, lead)
         gun_aligned = bool(gun and gun.get("reload", 0) <= .1 and gun["cooldown"] <= .11
                            and (gun_clear or d < 35)
@@ -392,7 +423,7 @@ class Bot:
                 short = ("laser" in target.get("weapons", ())
                          and (target.get("charging", False) or -.4 < short_left <= .22))
                 reserve = 18 if retreat else 12
-                eligible = ((offensive or return_fire or short) and d < stats["range"]
+                eligible = (not self.recovering and (offensive or return_fire or short) and d < stats["range"]
                             and weapon["cooldown"] <= .11 and
                             me["energy"] > stats["energy"] + (3 if short else reserve))
                 if eligible:
@@ -400,8 +431,13 @@ class Bot:
             elif kind == "laser":
                 same_target = self.laser_target == target["id"]
                 if charge:
+                    # Keep the same target until the actual torso can hit it.
+                    # A charged laser held while the aim slews is preferable to
+                    # accidentally releasing an unaligned shot.
+                    max_hold = stats["charge"] + min(1.2, stats.get("hold_s", 2.0) - 0.25)
                     act["fire"][i] = bool(offensive and same_target and clear and (
-                        charge < stats["charge"] - 0.05 or (not aligned and error < 0.12 and not urgent)
+                        charge < stats["charge"] - 0.05 or
+                        (not aligned and charge < max_hold)
                     ))
                 else:
                     act["fire"][i] = bool(offensive and not urgent and clear and allowed_pitch and error < 0.10
