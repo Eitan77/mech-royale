@@ -189,7 +189,10 @@ class Arena:
                 altitude = top + extra
                 ascent = max(0, altitude - level) / climb
                 transit = 0.55 + cross / max(1, stats["walk_speed"])
-                needed = stats["jet_drain"] * (ascent + transit + 0.2)
+                # Reserve full thrust for the horizontal crossing and allow
+                # some savings only on the steady-speed part of ascent.
+                steady = max(0, ascent - 0.7)
+                needed = stats["jet_drain"] * (ascent - 0.20 * steady + transit + 0.4)
                 if needed > energy - 2 or walking / stats["walk_speed"] + transit + ascent > 20:
                     continue
                 if not all(self.clear(*start, level + i * (altitude - level) / max(1, math.ceil(altitude - level)),

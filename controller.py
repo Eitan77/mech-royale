@@ -4,6 +4,7 @@ import time
 
 from arena import Arena
 from pilot import choose_movement
+from storm_tactics import mortar_shot, storm_screen
 import mechfight as mf
 from mobility import GroundBoost, defensive_yaw, jet_pulse, project_ascent, rear_laser_bonus
 
@@ -72,7 +73,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "clover-v4-pilot"
+    name = "clover-v4-integrated"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -180,7 +181,9 @@ class Bot:
                 d = distance(p, q)
                 if d > 130 or distance(q, zone["next_center"]) > zone["next_radius"] + max(0, zone["shrink_end"] - now) * 3:
                     continue
-                if abs(q[2] - self.arena.ground(*q[:2])) > 5 and abs(q[2] - p[2]) > 4:
+                if (abs(q[2] - self.arena.ground(*q[:2])) > 5 and abs(q[2] - p[2]) > 4
+                    and (group not in ("pickups", "cubes") or nearest < 95 or d > 45
+                         or obs["self"]["energy"] < 70 or q[2] - p[2] > 78)):
                     continue
                 if group == "mechs" and item["kind"] != "npc":
                     continue
@@ -260,12 +263,26 @@ class Bot:
             gun_clear = gun_aligned and self.arena.shot(origin, lead)
         else:
             gun_aligned, gun_clear = aligned, clear
+        mortar = next((w for w in me["weapons"] if w and w["kind"] == "mortar"), None)
+        zone = obs["zone"]
+        outward = abs(distance(target["pos"], zone["center"]) - zone["radius"]) < 13
+        mortar_aim = None
+        if (mortar and is_mech and not urgent and "laser" not in target.get("weapons", ())
+                and (outward or not gun_clear and not retreat) and d < 145 and mortar["cooldown"] <= .35):
+            mortar_aim = mortar_shot(self.arena, origin, target["pos"], target["vel"], mortar["stats"], zone, outward)
+            if mortar_aim and cfg["min_pitch"] <= mortar_aim[1] <= cfg["max_pitch"]:
+                act["aim"] = list(mortar_aim)
+                gun_aligned = False
+            else:
+                mortar_aim = None
         for i, weapon in enumerate(me["weapons"]):
             if not weapon:
                 continue
             kind, stats = weapon["kind"], weapon["stats"]
             if kind == "gun":
                 act["fire"][i] = bool((offensive or return_fire) and gun_aligned and gun_clear and d < stats["range"] - 3)
+            elif kind == "mortar" and mortar_aim:
+                act["fire"][i] = angle_delta(mortar_aim[0], me["aim"][0]) < .035 and abs(mortar_aim[1] - me["aim"][1]) < .023
             elif kind == "lightning":
                 short = target.get("charging", False) and "laser" in target.get("weapons", ())
                 reserve = 18 if retreat else 12
@@ -319,7 +336,8 @@ class Bot:
             return True, anchor if self.roof_traversing else launch
 
         horizontal_speed = math.hypot(*me["vel"][:2])
-        flight_window = 2 < remain < min(17, energy / stats["jet_drain"] * 1.35)
+        high_roll = energy >= 170 and stats["jet_drain"] <= 9 and remain < 37
+        flight_window = 2 < remain < min(37 if high_roll else 17, energy / stats["jet_drain"] * 1.35)
         if not self.launching and flight_window and d < 2.0 and horizontal_speed <= 2 and me["hp"] > zone["dps"]:
             climb, reserve = project_ascent(remain, me["vel"][2], energy, stats, me["grounded"])
             attained = p[2] + climb
@@ -342,7 +360,12 @@ class Bot:
                     exposed += weight
             clear_ascent = all(self.arena.clear(*p[:2], z, 2.5 * size, 9 * size)
                                for z in range(math.ceil(p[2]), math.ceil(attained), 3))
-            self.launching = protected > exposed and clear_ascent and reserve > 2
+            range_denial = high_roll and threats and all(
+                attained - (a["pos"][2] + 7 * (1 + .05 * a.get("cubes", 0))) >
+                self.config["weapons"]["laser"]["range"] + 10
+                and "mortar" not in a.get("weapons", ()) for a, _ in threats
+            )
+            self.launching = (protected > exposed or range_denial) and clear_ascent and reserve > 2
         if self.launching and (remain <= 0 or energy < 0.8 or d > max(3.5, zone["radius"] * 0.75)):
             self.launching = False
             self.landing = anchor
@@ -387,7 +410,9 @@ class Bot:
         slot = next((i for i, w in enumerate(me["weapons"]) if w and w["kind"] != "gun"), 1)
         second = me["weapons"][slot]
         kind = second["kind"] if second else None
-        weapon_values = dict(WEAPONS, laser=3 if nearest > 85 else 1)
+        weapon_values = dict(WEAPONS, laser=4 if nearest > 85 else 2,
+                             lightning=3, mortar=int(nearest > 50 and not any(
+                                 "laser" in e.get("weapons", ()) for e in enemies)))
         final = zone["next_radius"] <= 0
         goal = tuple(zone["next_center"])
         margin = zone["radius"] - distance(p, zone["center"])
@@ -464,6 +489,10 @@ class Bot:
                 if distance(q, zone["center"]) < zone["radius"] - 18 and self.arena.walk(p[:2], q, size):
                     goal = q
                     break
+        if retreat and visible and not urgent and not final and objective is None and time.perf_counter() < started + .014:
+            screened = storm_screen(self.arena, p, visible, zone, size, started + .016)
+            if screened is not None:
+                goal = screened
         if obs["offer"]:
             priorities = {"nanites": 100 if now < 340 else 35, "plating": 92, "servos": 77, "armor": 75,
                           "gun_mag": 74 if now < 205 else 61, "jets": 67 if now < 360 else 82,
@@ -473,6 +502,8 @@ class Bot:
             act["pick"] = max(range(len(choices)), key=lambda i: priorities.get(choices[i]["id"], 40))
         pickups = [item for item in obs["pickups"] if distance(p, item["pos"]) < self.config["loot"]["pickup_radius"] - 0.1
                    and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
+        if kind == "mortar" and laser_threat and not pickups:
+            act["drop"] = slot
         if pickups and not (second and second.get("charge")) and (
             not second or kind == "mortar" or nearest > 35 and now - self.last_damage > 3
         ):
@@ -484,6 +515,12 @@ class Bot:
         if final:
             flight, goal = self.final_movement(act, me, threats, p, anchor, goal, roof, remain,
                                                zone, size, now, started + 0.019)
+        elif objective and objective[0] in ("cubes", "pickups") and not threats:
+            elevated = objective[2]
+            if elevated[2] - p[2] > 4 and elevated[2] - self.arena.ground(*elevated[:2]) > 4:
+                flight, goal = self.final_movement(act, me, [], p, tuple(elevated[:2]), goal,
+                                                   self.arena.roof(*elevated[:2]), max(18, remain),
+                                                   zone, size, now, started + .019)
         target = None
         if not flight:
             if enemies:
@@ -514,7 +551,7 @@ class Bot:
             else:
                 sweep = (now % 7) * math.tau / 1.8 if now % 7 < 1.8 and not urgent else 0
                 act["aim"] = [bearing(p, goal) + sweep, 0]
-        if threats and (retreat or flight or urgent) and not any(act["fire"]):
+        if threats and (retreat or flight or urgent) and not any(act["fire"]) and kind != "mortar":
             risks = [(bearing(p, a["pos"]), weight / (1 + distance(p, a["pos"]) / 120)) for a, weight in threats]
             for projectile in obs["projectiles"][:12]:
                 q, v = projectile["pos"], projectile["vel"]
@@ -555,7 +592,7 @@ class Bot:
                         waypoint = self.path[0]
             straight = distance(p, waypoint)
             dx, dy = waypoint[0] - p[0], waypoint[1] - p[1]
-            if final and not me["grounded"]:
+            if (final or flight) and not me["grounded"]:
                 dx = 0.30 * dx - 0.24 * me["vel"][0]
                 dy = 0.30 * dy - 0.24 * me["vel"][1]
             length = math.hypot(dx, dy)
