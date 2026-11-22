@@ -84,7 +84,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "Isolated Duels"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -135,6 +135,62 @@ class Bot:
         self.foliage_until = -100.
         self.foliage_active = False
         self.ambush_target_id = None
+        self.duel_target = None
+
+    def isolated_duel(self, me, enemies, estimates, zone, second, size, deadline):
+        """Commit only while the visible fight can buy a kill with spare health."""
+        if not second or second["kind"] not in ("lightning", "laser") or not me["grounded"]:
+            return None
+        p = me["pos"]
+        active = self.duel_target
+        health = me["hp"] / me["max_hp"]
+        for enemy in sorted(enemies, key=lambda item: estimates[item["id"]][0]):
+            if time.perf_counter() >= deadline:
+                break
+            continuing = enemy["id"] == active
+            if health < (.56 if continuing else .81):
+                continue
+            if enemy["hp"] > (.74 if continuing else .52) * enemy["max_hp"]:
+                continue
+            q = enemy["pos"]
+            gap = distance(p, q)
+            if not 18 < gap < (115 if second["kind"] == "laser" else second["stats"]["range"] + 19):
+                continue
+            if any(other["id"] != enemy["id"] and (
+                distance(other["pos"], p) < 125 or distance(other["pos"], q) < 95
+            ) for other in enemies):
+                continue
+            margin = zone["radius"] - distance(q, zone["center"])
+            next_margin = zone["next_radius"] - distance(q, zone["next_center"])
+            if margin < 14 or next_margin < 6:
+                continue
+            seconds, incoming = estimates[enemy["id"]]
+            if second["kind"] == "lightning" and "mortar" in enemy["weapons"]:
+                continue
+            if second["kind"] == "lightning" and gap > second["stats"]["range"]:
+                if "laser" not in enemy["weapons"]:
+                    continue
+                seconds += (gap - second["stats"]["range"]) / me["stats"]["boost_speed"]
+                if me["energy"] < 45:
+                    continue
+            if seconds > 6 or incoming > me["hp"] * (.43 if continuing else .32):
+                continue
+            own_muzzle = (*p[:2], p[2] + me["stats"]["muzzle_height"])
+            if not self.arena.shot(own_muzzle, self.target_body(enemy)):
+                continue
+            if second["kind"] == "lightning":
+                desired = .72 * second["stats"]["range"]
+            else:
+                desired = 51 if "lightning" in enemy["weapons"] else 34
+            yaw = bearing(q, p)
+            # Stay at our weapon's preferred range while trying both flanks.
+            for delta in (.28 * self.evade_side, -.28 * self.evade_side, 0):
+                angle = yaw + delta
+                point = q[0] + desired * math.cos(angle), q[1] + desired * math.sin(angle)
+                if (distance(point, zone["center"]) < zone["radius"] - 10 and
+                        self.arena.walk(p[:2], point, size)):
+                    return enemy, point
+        return None
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -1014,6 +1070,16 @@ class Bot:
             if second:
                 act["drop"] = slot
         capture = self.finish_capture(obs, enemies) if not urgent and not final else None
+        engagement = None
+        if not capture and not urgent and not final and not attacking_npcs and not own_laser_charging:
+            engagement = self.isolated_duel(me, enemies, estimates, zone, second, size, started + .022)
+            self.duel_target = engagement[0]["id"] if engagement else None
+            if engagement:
+                _, goal = engagement
+                self.mode = "FIGHT"
+                retreat = self.recovering = False
+                self.foliage_active = False
+                objective = None
         if capture:
             goal = tuple(capture["pos"][:2])
             self.foliage_active = False
@@ -1052,6 +1118,8 @@ class Bot:
             flight, goal = self.cross_obstacle(act, me, goal, zone, size, now, started + .022)
         target = None
         if not flight:
+            if engagement:
+                target = engagement[0]
             # A charging laser must retain its target while it slews/charges.
             if second and second["kind"] == "laser" and second.get("charge", 0) and self.laser_target is not None:
                 target = next((a for a in (*obs["mechs"], *obs["crates"])
