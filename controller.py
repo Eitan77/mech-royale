@@ -806,7 +806,8 @@ class Bot:
                 # A dense canopy can hide the entire nine-meter mech from
                 # distant FOV vision, even when a normal hard cover path
                 # is unavailable. Proximity sensors ignore the canopy.
-                if (not attacking_npcs and nearest>54 and now<325 and
+                if (not attacking_npcs and not charging_now and
+                        nearest>54 and hp<.82 and now<325 and
                         zone["next_radius"]>70 and me["grounded"]):
                     if (now-self.foliage_scan_at>1.5 and
                             time.perf_counter()<started+.012):
@@ -1002,6 +1003,12 @@ class Bot:
         self.combat(act, obs, origin, target, retreat, urgent,
                     final and (hp < .86 or remain < 12) and
                     (not target or target.get("kind") != "npc"), priority_enemy)
+        if (self.foliage_active and nearest>100 and
+                not danger.get("charging") and not attacking_npcs):
+            # No weapon report may betray our silent canopy retreat.
+            # Enemies with a direct close-range threat override this.
+            act["fire"]=[False,False]
+            act["reload"]=False
         if not target:
             if threats:
                 act["aim"] = [bearing(p, threats[0][0]["pos"]), 0]
