@@ -84,7 +84,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "Laser Corner Cycle"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -135,6 +135,69 @@ class Bot:
         self.foliage_until = -100.
         self.foliage_active = False
         self.ambush_target_id = None
+        self.corner = None
+        self.corner_checked = -100.
+
+    def corner_cycle(self, me, enemies, zone, now, size, laser, deadline):
+        """Charge behind a wall and expose only for the release."""
+        p = me["pos"]
+        if len(enemies) != 1 or not me["grounded"] or zone["next_radius"] < 25 or (
+            me["hp"] < .70 * me["max_hp"] or now - self.last_damage < .45
+        ):
+            return None
+        enemy = enemies[0]
+        gap = distance(p, enemy["pos"])
+        if not 65 < gap < 175:
+            return None
+        muzzle_height = me["stats"]["muzzle_height"]
+        target = self.target_body(enemy)
+        charge = laser.get("charge", 0)
+        body = (*p[:2], p[2] + muzzle_height)
+        if self.corner and self.corner[0] == enemy["id"]:
+            _, home, peek, expires = self.corner
+            home_floor = self.arena.ground(*home)
+            if now < expires and distance(p, home) < 15 and not self.arena.shot(
+                (*home, home_floor + muzzle_height), target,
+            ):
+                aim = target
+                if not charge and laser["cooldown"] > .10:
+                    return home, aim, False
+                if charge and self.arena.shot(body, target):
+                    if charge >= laser["stats"]["charge"]:
+                        yaw = bearing(body, target)
+                        pitch = math.atan2(target[2] - body[2], distance(body, target))
+                        ready = shot_connects(
+                            self.arena, body, me, (yaw, pitch), enemy, laser,
+                            2.5 * (1 + .05 * enemy["cubes"]), 9 * (1 + .05 * enemy["cubes"]),
+                        )
+                        if not ready and charge < laser["stats"]["charge"] + .35:
+                            return tuple(p[:2]), aim, True
+                    # Move back as the hit is released.
+                    return home, aim, charge < laser["stats"]["charge"]
+                return (peek if charge >= .15 else home), aim, True
+            self.corner = None
+        if charge or laser["cooldown"] > .15 or now - self.corner_checked < .65:
+            return None
+        self.corner_checked = now
+        if (p[2] > self.arena.ground(*p[:2]) + 2 or self.arena.shot(body, target)
+                or distance(p, zone["next_center"]) > zone["next_radius"] - 15):
+            return None
+        home = tuple(p[:2])
+        toward = bearing(p, target)
+        for radius in (3, 5, 7, 9):
+            for offset in (.6, -.6, 1.2, -1.2, 0., 1.8, -1.8):
+                if time.perf_counter() >= deadline:
+                    return None
+                ang = toward + offset
+                peek = p[0] + radius * math.cos(ang), p[1] + radius * math.sin(ang)
+                if distance(peek, zone["next_center"]) > zone["next_radius"] - 10:
+                    continue
+                if self.arena.walk(home, peek, size) and self.arena.shot(
+                    (*peek, self.arena.ground(*peek) + muzzle_height), target,
+                ):
+                    self.corner = enemy["id"], home, peek, now + 5.5
+                    return home, target, True
+        return None
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -1101,13 +1164,31 @@ class Bot:
         self.combat(act, obs, origin, target, retreat, urgent,
                     final and (hp < .86 or remain < 12) and
                     (not target or target.get("kind") != "npc"), priority_enemy)
+        corner = None
+        if (kind == "laser" and act.get("take") is None and not capture and not flight and not retreat
+                and not urgent and not final and not attacking_npcs and objective is None
+                and time.perf_counter() < started + .023):
+            corner = self.corner_cycle(me, enemies, zone, now, size, second, started + .028)
+        if corner:
+            goal, point, hold = corner
+            delay = firing_delay(second)
+            point = project_position(point, enemies[0]["vel"], delay)
+            source = project_position(origin, me["vel"], delay)
+            pitch = math.atan2(point[2] - source[2], distance(source, point))
+            cfg = self.config["mech"]
+            act["aim"] = [bearing(source, point), max(cfg["min_pitch"], min(cfg["max_pitch"], pitch))]
+            act["fire"] = [False, False]
+            act["fire"][slot] = hold
+            act["reload"] = False
+            if hold:
+                self.laser_target = enemies[0]["id"]
         if (self.foliage_active and nearest>100 and
                 not danger.get("charging") and not attacking_npcs):
             # No weapon report may betray our silent canopy retreat.
             # Enemies with a direct close-range threat override this.
             act["fire"]=[False,False]
             act["reload"]=False
-        if not target:
+        if not target and not corner:
             if threats:
                 act["aim"] = [bearing(p, threats[0][0]["pos"]), 0]
             elif any(sound["kind"] in ("laser", "gun", "lightning") and sound["dist"] == "near" for sound in obs["sounds"]):
@@ -1146,7 +1227,7 @@ class Bot:
                        and (not me["grounded"] or self.arena.walk(p[:2], anchor, size)))
         if center_lock:
             act["move"] = self.center_control(me, anchor)
-        if not center_lock and not flight and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:
+        if not corner and not center_lock and not flight and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:
             holding_laser = kind == "laser" and act["fire"][slot] and (
                 own_laser_charging or second["cooldown"] <= .1
             )
