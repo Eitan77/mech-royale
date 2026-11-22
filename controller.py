@@ -1032,7 +1032,15 @@ class Bot:
             act["boost"] = True
         # Behind hard cover, do not advertise our position with footsteps
         # while waiting for the regeneration timer. Preserve zone timing.
-        quiet = (danger["exposed"] == 0 and nearest > 45 and
+        # A safe cube within a few meters is worth briefly moving for:
+        # +4% maximum HP and immediate healing. Do not let the ghost hold
+        # cancel the explicitly selected cube pickup.
+        cube_on_goal = any(distance(cube["pos"],goal)<.5 and
+                           3.5<distance(cube["pos"],p)<10 and
+                           abs(cube["pos"][2]-p[2])<4
+                           for cube in obs["cubes"])
+        quiet = (not cube_on_goal and danger["exposed"] == 0 and
+                 nearest > 45 and
                  should_silence(me, self.mode, zone, now, self.last_damage,
                                 urgent))
         if quiet:
