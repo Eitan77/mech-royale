@@ -63,6 +63,30 @@ class Tests(unittest.TestCase):
         z={"center":[0,0],"radius":600,"next_center":[0,0],"next_radius":30}
         self.assertIsNone(self.woods.refuge(me,[enemy],z,SimpleArena(),
                                             time.perf_counter()+.03))
+    def test_shadow_behind_crown_when_trunk_center_is_unusable(self):
+        from collections import defaultdict
+        shade=Foliage.__new__(Foliage)
+        shade.density=.35
+        shade.block_t=.25
+        shade.trees=[(0.,0.,2.,15.,6.,0.,0.,.6,0.)]
+        shade.cells=defaultdict(list)
+        for cx in range(-2,3):
+            for cy in range(-2,3):
+                shade.cells[(cx,cy)]=[0]
+        class BlockedTrunk:
+            def ground(self,x,y):return 0.
+            def clear(self,x,y,*args):return math.hypot(x,y)>5.2
+            def walk(self,*args):return True
+        me={"pos":[12.,0.,0.],"cubes":0}
+        enemy={"kind":"mech","pos":[-80.,0.,0.],"cubes":0}
+        zone={"center":[0.,0.],"radius":100.,
+              "next_center":[0.,0.],"next_radius":80.}
+        result=shade.refuge(me,[enemy],zone,BlockedTrunk(),
+                            time.perf_counter()+.1,limit=35.)
+        self.assertIsNotNone(result)
+        self.assertGreater(result[1][0],5.2)
+        self.assertGreaterEqual(result[2],.7)
+
     def test_hide_refuge_never_chosen_inside_proximity(self):
         me={"pos":[-480.,143.,0.],"cubes":0}
         enemy={"kind":"mech","pos":[-465.,143.,0.],"cubes":0}
