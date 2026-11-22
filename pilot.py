@@ -30,14 +30,34 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
     options.extend((math.cos(preferred + angle), math.sin(preferred + angle))
                    for angle in (0, .40, -.40, .80, -.80, 1.45, -1.45, 2.1, -2.1))
     aim_lines = []
-    for enemy, weight in threats[:4]:
+    # The controller sorts threats by distance; this planner must still see a
+    # charging laser hiding behind several closer gunners. Keep the nearest
+    # opponent plus the three most urgent weapon threats.
+    nearest_threat = min(threats, key=lambda x: math.hypot(
+        x[0]["pos"][0]-p[0], x[0]["pos"][1]-p[1])) if threats else None
+    prioritized = sorted(threats, key=lambda x: (
+        0 if x[0].get("charging") and "laser" in x[0].get("weapons", ()) else
+        1 if "laser" in x[0].get("weapons", ()) else 2,
+        math.hypot(x[0]["pos"][0]-p[0], x[0]["pos"][1]-p[1])))
+    selected = ([nearest_threat] if nearest_threat is not None else [])
+    selected.extend(x for x in prioritized if x is not nearest_threat)
+    for enemy, weight in selected[:4]:
         q = enemy["pos"]
         d = math.hypot(p[0] - q[0], p[1] - q[1])
         if 5 < d < (280 if "laser" in enemy.get("weapons", ()) else 235):
             yaw = enemy["aim"][0]
             aim_lines.append((q, d, math.cos(yaw), math.sin(yaw), weight,
                               enemy.get("charging", False), "lightning" in enemy.get("weapons", ())))
-    charger = next((q for q, d, _, _, _, charging, _ in aim_lines if charging and d < 280), None)
+    # Only promote a charger whose muzzle can currently reach our body.
+    # A blocked charger should not displace an exposed one in the planner.
+    charger = None
+    for q, d, _, _, _, charging, _ in aim_lines:
+        if not charging or d >= 280 or time.perf_counter() >= deadline - .006:
+            continue
+        muzzle = (q[0], q[1], q[2] + 7)
+        if arena.shot(muzzle, (p[0], p[1], p[2] + 5 * size)):
+            charger = q
+            break
     if charger is not None:
         options.append((-math.cos(preferred), -math.sin(preferred)))
     charger_muzzle = None if charger is None else (charger[0], charger[1], charger[2] + 7)
