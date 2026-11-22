@@ -27,6 +27,13 @@ class Tests(unittest.TestCase):
     def test_energy_reserve(self):
         self.assertGreater(energy_floor(self.me),20)
         self.assertLess(energy_floor(self.me,True),10)
+    def test_close_enemy_interrupts_farm(self):
+        d={"exposed":1,"near":1,"lasers":0,"charging":0,"closest":28}
+        self.assertEqual(next_mode("FARM",1,d,False,10,-100,-100,has_objective=True),"FIGHT")
+    def test_far_enemy_allows_farm(self):
+        d={"exposed":1,"near":0,"lasers":0,"charging":0,"closest":160}
+        self.assertEqual(next_mode("TRAVEL",1,d,False,10,-100,-100,has_objective=True),"FARM")
+
     def test_resource_hysteresis(self):
         self.assertTrue(should_commit_resource(3,1,True,False))
         self.assertFalse(should_commit_resource(6,1,True,False))
