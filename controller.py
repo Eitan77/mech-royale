@@ -33,6 +33,42 @@ def intercept(origin, target, velocity, speed):
     return tuple(p + travel * v for p, v in zip(target, velocity))
 
 
+def duel(me, enemy, weapons, attackers):
+    distance_xy = distance(me["pos"], enemy["pos"])
+
+    def dps(loadout, cubes):
+        total = 0
+        for w in loadout:
+            if not w:
+                continue
+            kind = w["kind"] if isinstance(w, dict) else w
+            stats = w["stats"] if isinstance(w, dict) else weapons[kind]
+            if distance_xy >= stats.get("range", 140):
+                continue
+            period = stats["cooldown"]
+            confidence = 0.65
+            if kind == "gun":
+                period += stats["reload"] / stats["mag"]
+                confidence = max(0.18, 0.74 - distance_xy * 0.003)
+            elif kind == "laser":
+                period += stats["charge"]
+            elif kind == "lightning":
+                confidence = 0.88
+            else:
+                confidence = 0.2
+            total += confidence * stats["damage"] / period
+        return total * (1 + 0.04 * min(10, cubes))
+
+    own = [w for w in me["weapons"] if w and (w["kind"] != "lightning" or me["energy"] > 18)]
+    enemy_weapons = enemy.get("weapons", ("gun",))
+    outgoing = dps(own, me["cubes"])
+    incoming = dps(enemy_weapons, enemy.get("cubes", 0)) * (1 - me["stats"].get("armor", 0))
+    if any(w["kind"] == "lightning" and distance_xy < w["stats"]["range"] - 2 for w in own) and "laser" in enemy_weapons:
+        incoming *= 0.65
+    seconds = enemy.get("hp", enemy.get("max_hp", 1400)) / max(1, outgoing)
+    return seconds, seconds * incoming * (1 + 0.55 * max(0, attackers - 1))
+
+
 class Bot:
     name = "clover-v3"
 
@@ -52,7 +88,11 @@ class Bot:
         self.launching = False
         self.laser_target = None
         self.loot_goal = None
-        self.jet_roof = False
+        self.roof_plan = None
+        self.roof_plan_at = -100
+        self.roof_target = None
+        self.roof_crossing = False
+        self.roof_traversing = False
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4), ("projectiles", 0.25)):
@@ -105,6 +145,15 @@ class Bot:
     def objective(self, obs, enemies, weapon, p, zone, now):
         best, best_score = None, 0
         hp = obs["self"]["hp"] / obs["self"]["max_hp"]
+        stats = obs["self"]["stats"]
+        size = 1 + 0.05 * obs["self"]["cubes"]
+
+        travel_budget = time.perf_counter() + 0.004
+
+        def travel(q, d):
+            direct = time.perf_counter() < travel_budget and self.arena.walk(p[:2], q[:2], size)
+            return (d if direct else 1.45 * d + 9) / stats["walk_speed"]
+
         count = obs["self"]["cubes"]
         nearest = min((distance(p, e["pos"]) for e in enemies), default=300)
         for drop in obs["drops"]:
@@ -112,7 +161,8 @@ class Bot:
             d = distance(p, q)
             contested = any(distance(e["pos"], q) < drop["radius"] + 10 for e in enemies)
             if not contested and drop["holder"] in (None, obs["self"]["id"]) and d < 125:
-                score = 17 + (1 - hp) * 36 - 0.20 * d - 0.6 * max(0, drop["lands_in"] - d / 12 - 3)
+                eta = travel(q, d)
+                score = 17 + (1 - hp) * 36 - 2.3 * eta - 0.6 * max(0, drop["lands_in"] - eta - 3)
                 if score > best_score:
                     best, best_score = ("drop", drop["id"], q), score
         for group in ("cubes", "pickups", "crates", "mechs"):
@@ -132,7 +182,10 @@ class Bot:
                 if group in ("cubes", "pickups") and any(distance(e["pos"], q) < min(24, d * 0.7) for e in enemies):
                     continue
                 value = {"cubes": 27 if count < 10 else 4, "pickups": 35, "crates": 13, "mechs": 22}[group]
-                score = value - 0.24 * d - 0.29 * (now - seen)
+                score = value - 2.8 * travel(q, d) - 0.29 * (now - seen)
+                if group == "mechs":
+                    exposed = max(0, 5 - (hp - 0.65) * 10)
+                    score -= exposed
                 if self.loot_goal == ident:
                     score += 4
                 if score > best_score:
@@ -245,6 +298,69 @@ class Bot:
                 best, best_score = (cx, cy), score
         return best, True
 
+    def final_movement(self, act, me, threats, p, anchor, goal, roof, remain, zone, size, now, deadline):
+        stats = me["stats"]
+        energy = me["energy"]
+        d = distance(p, anchor)
+        ground = self.arena.ground(*anchor)
+        needs_roof = roof > ground + 2 and p[2] < roof - 0.25
+        if self.roof_target != anchor:
+            self.roof_target, self.roof_plan, self.roof_crossing = anchor, None, False
+            self.roof_plan_at = -100
+            self.roof_traversing = False
+        if self.roof_plan is not None and not self.roof_crossing:
+            _, launch, _, fuel = self.roof_plan
+            if energy < fuel or d > 115 or not needs_roof:
+                self.roof_plan = None
+        if needs_roof and self.roof_plan is None and d < 110 and now - self.roof_plan_at > 1:
+            self.roof_plan_at = now
+            self.roof_plan = self.arena.roof_route(p, anchor, size, stats, energy, deadline)
+        if self.roof_plan:
+            _, launch, altitude, _ = self.roof_plan
+            if not self.roof_crossing and distance(p, launch) > 1.9:
+                return False, launch
+            self.roof_crossing = True
+            if energy < 1 or (d < 1.2 and p[2] >= roof - 0.25):
+                self.roof_plan = None
+                self.roof_crossing = self.roof_traversing = False
+                return False, anchor
+            act["jump"] = bool(me["grounded"])
+            act["boost"] = not me["grounded"]
+            self.roof_traversing |= p[2] >= altitude - 0.4
+            return True, anchor if self.roof_traversing else launch
+
+        fuel_time = energy / stats["jet_drain"]
+        flight_window = 1 < remain < min(10, fuel_time - 0.35)
+        if not self.launching and flight_window and d < 3.5 and me["hp"] > zone["dps"]:
+            attained = p[2] + min(remain, fuel_time) * stats["max_rise_speed"]
+            slope = math.tan(self.config["mech"]["max_pitch"])
+            protected, exposed = 0.0, 0.0
+            for enemy, weight in threats:
+                enemy_pos = enemy["pos"]
+                reach = distance(anchor, enemy_pos)
+                equipment = enemy.get("weapons", ("gun",))
+                muzzle = enemy_pos[2] + self.config["mech"]["muzzle_height"] * (1 + enemy.get("cubes", 0) * 0.05)
+                if "mortar" in equipment and reach < 175:
+                    exposed += weight
+                if ("gun" in equipment or "laser" in equipment) and reach < 280:
+                    ceiling = muzzle + slope * (reach + 2.5 * size + 5)
+                    if attained > ceiling + 6 and ceiling - p[2] < 0.65 * (attained - p[2]):
+                        protected += weight
+                    elif self.arena.shot((*enemy_pos[:2], muzzle), (*anchor, attained + 4)):
+                        exposed += weight
+                if "lightning" in equipment and reach < 45:
+                    exposed += weight
+            clear_ascent = all(self.arena.clear(*p[:2], z, 2.5 * size, 9 * size)
+                               for z in range(math.ceil(p[2]), math.ceil(attained), 3))
+            self.launching = protected > exposed and clear_ascent
+        if remain <= 0 or energy < 0.8:
+            self.launching = False
+        if self.launching:
+            act["jump"] = bool(me["grounded"])
+            act["boost"] = not me["grounded"]
+            return True, anchor
+        return False, goal
+
     def act(self, obs):
         started = time.perf_counter()
         now, me, zone = obs["t"], obs["self"], obs["zone"]
@@ -283,7 +399,9 @@ class Bot:
                 goal = (goal[0] + (p[0] - goal[0]) * offset, goal[1] + (p[1] - goal[1]) * offset)
         anchor = goal
         laser_threat = any("laser" in a.get("weapons", ()) for a, _ in threats)
-        favorable = kind == "lightning" and nearest < 43 and len(enemies) == 1 and me["energy"] > 22 and hp > 0.58
+        estimates = {enemy["id"]: duel(me, enemy, self.config["weapons"], len(threats)) for enemy in enemies}
+        favorable = bool(visible and len(enemies) == 1 and estimates[visible["id"]][0] < 8
+                         and estimates[visible["id"]][1] < min(me["hp"] * 0.33, 420))
         retreat = bool(threats and not favorable and (laser_threat or hp < 0.72 or len(enemies) >= 2 or nearest < 35))
         if hp < 0.7 and now - max(self.last_damage, self.last_hit) < stats.get("regen_delay", 5) + 3 and threats:
             retreat = retreat or not favorable
@@ -331,44 +449,33 @@ class Bot:
             if second:
                 act["drop"] = slot
         roof = self.arena.roof(*anchor) if final else -math.inf
-        roof_trip = final and roof > self.arena.ground(*anchor) + 2 and p[2] < roof - 0.25
-        if roof_trip:
-            launch_distance = min(32, 9 + max(0, roof - p[2]) * 0.9)
-            if distance(p, anchor) < launch_distance and me["energy"] > 30:
-                self.jet_roof = True
-        if not roof_trip or me["energy"] < 3:
-            self.jet_roof = False
-        jet_seconds = me["energy"] / stats["jet_drain"]
-        loiter = final and distance(p, anchor) < 5 and remain < min(10, jet_seconds + 0.6)
-        loiter = loiter and remain > 0.8 and jet_seconds > 4.0 and hp > 0.18 and nearest < 110
-        if loiter and not self.jet_roof and (laser_threat or nearest < 40) and (zone["radius"] < 12 or stats["jet_drain"] < 12):
-            self.launching = True
-        if not final or remain <= 0 or me["energy"] <= 0.8:
-            self.launching = False
-        flight = (self.launching or self.jet_roof) and me["energy"] > 0.8
-        if flight:
-            goal = anchor
-            act["jump"] = bool(me["grounded"])
-            act["boost"] = bool(not me["grounded"])
+        flight = False
+        if final:
+            flight, goal = self.final_movement(act, me, threats, p, anchor, goal, roof, remain,
+                                               zone, size, now, started + 0.019)
         target = None
         if not flight:
             if enemies:
-                target = min(enemies, key=lambda a: distance(p, a["pos"]) * 0.50
-                             + a.get("hp", a.get("max_hp", 1400)) * 0.045
+                target = min(enemies, key=lambda a: distance(p, a["pos"]) * 0.28
+                             + min(40, estimates[a["id"]][0]) * 2 + min(1200, estimates[a["id"]][1]) * 0.02
                              - (55 if kind == "lightning" and a.get("charging") and distance(p, a["pos"]) < 44 else 0))
             if objective and objective[0] in ("mechs", "crates") and (not target or nearest > 125):
                 group, ident, _ = objective
                 resource = next((a for a in obs[group] if a["id"] == ident), None)
                 if resource:
                     target = resource
-            if not target and not final:
+            if not target and (not final or remain > 18):
                 nuisance = [a for a in obs["mechs"] if a["kind"] == "npc" and distance(a["pos"], p) < 43]
                 if nuisance:
                     target = min(nuisance, key=lambda a: distance(p, a["pos"]))
-        self.combat(act, obs, origin, target, retreat, urgent, final and (hp < 0.86 or remain < 12), visible)
+        self.combat(act, obs, origin, target, retreat, urgent, final and (hp < 0.86 or remain < 12) and (not target or target.get("kind") != "npc"), visible)
         if not target:
             if threats:
                 act["aim"] = [bearing(p, threats[0][0]["pos"]), 0]
+            elif any(sound["kind"] in ("laser", "gun", "lightning") and sound["dist"] == "near" for sound in obs["sounds"]):
+                recent = min((sound for sound in obs["sounds"] if sound["kind"] in ("laser", "gun", "lightning")
+                              and sound["dist"] == "near"), key=lambda sound: sound["age"])
+                act["aim"] = [recent["bearing"], 0]
             elif now - self.last_damage < 3 and self.damage_bearing is not None:
                 act["aim"] = [self.damage_bearing, 0]
             else:

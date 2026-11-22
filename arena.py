@@ -153,3 +153,52 @@ class Arena:
             route.append((best[0] * STEP, best[1] * STEP))
             best = parent[best]
         return route[::-1]
+
+    def air_lane(self, a, b, altitude, size):
+        """Check the swept cylinder along a level aerial segment."""
+        steps = max(1, math.ceil(math.dist(a, b) / 1.5))
+        for i in range(steps + 1):
+            f = i / steps
+            x, y = (a[j] + f * (b[j] - a[j]) for j in (0, 1))
+            if altitude < self.ground(x, y) or not self.clear(x, y, altitude, size * 2.5, size * 9):
+                return False
+        return True
+
+    def roof_route(self, point, target, size, stats, energy, deadline):
+        """Select an accessible launch surface and a clear ascent and crossing."""
+        top = self.roof(*target)
+        radius, height = size * 2.5, size * 9
+        climb = min(stats["max_rise_speed"], stats["jump_speed"])
+        if climb <= 0 or stats["jet_accel"] <= stats.get("gravity", 22):
+            return None
+        best = None
+        for start in (point[:2], *((target[0] + r * math.cos(a), target[1] + r * math.sin(a))
+                                  for r in (9, 17, 26, 36) for a in (i * math.tau / 12 for i in range(12)))):
+            if time.perf_counter() > deadline:
+                break
+            walking = math.dist(point[:2], start)
+            if walking > 105:
+                continue
+            level = point[2] if walking < 0.1 else self.ground(*start)
+            if walking >= 0.1 and not self.clear(*start, level, radius, height):
+                continue
+            if not walking < 0.1 and self.roof(*start) > level + 2:
+                continue
+            cross = math.dist(start, target)
+            for extra in (1.7, 5, 10):
+                altitude = top + extra
+                ascent = max(0, altitude - level) / climb
+                transit = 0.55 + cross / max(1, stats["walk_speed"])
+                needed = stats["jet_drain"] * (ascent + transit + 0.2)
+                if needed > energy - 2 or walking / stats["walk_speed"] + transit + ascent > 20:
+                    continue
+                if not all(self.clear(*start, level + i * (altitude - level) / max(1, math.ceil(altitude - level)),
+                                      radius, height) for i in range(max(1, math.ceil(altitude - level)) + 1)):
+                    continue
+                if not self.air_lane(start, target, altitude, size):
+                    continue
+                cost = walking / stats["walk_speed"] + ascent + transit
+                if best is None or cost < best[0]:
+                    best = cost, start, altitude, needed
+                break
+        return best
