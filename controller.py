@@ -18,6 +18,7 @@ from mechanics_v9 import (one_shot_laser_ambush, easy_laser_drone,
                           contest_center, storm_finish)
 from tactical_v10 import (imminent_projectile, sniper_choice,
                           resource_laser_silence)
+from pursuit_v11 import ShadowAtlas, focus_fire, hold_shadow, anti_lead
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -84,12 +85,13 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "V11-Shadowbreak"
 
     def __init__(self, hello):
         self.config = hello["config"]
         self.arena = Arena(hello["map"]["dir"])
         self.foliage = Foliage(hello["map"]["dir"])
+        self.shadow_atlas = ShadowAtlas(self.arena)
         self.memory = {name: {} for name in ("crates", "cubes", "pickups", "mechs")}
         self.last_damage = -100
         self.last_hit = -100
@@ -135,6 +137,11 @@ class Bot:
         self.foliage_until = -100.
         self.foliage_active = False
         self.ambush_target_id = None
+        self.shadow_goal = None
+        self.shadow_until = -100.
+        self.shadow_scan_at = -100.
+        self.shadow_active = False
+        self.shadow_sheltered = False
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -832,6 +839,12 @@ class Bot:
         if (new_mode=="HEAL" and not urgent and not final and
                 imminent_projectile(me,obs["projectiles"],zone)):
             new_mode="EVADE"
+        # Opening house-squad target lock: kill their LOS before we lose
+        # 850HP as in the kit's recorded first fifteen seconds.
+        focused = focus_fire(me,enemies,obs["projectiles"],now,self.last_damage)
+        if (focused and not urgent and not final and
+                hp<.91 and now<160 and not own_laser_charging):
+            new_mode="EVADE"
         if new_mode != self.mode:
             self.mode, self.mode_since = new_mode, now
         retreat = self.mode in ("EVADE", "HEAL")
@@ -959,6 +972,56 @@ class Bot:
             screened = storm_screen(self.arena, p, visible, zone, size, started + .016)
             if screened is not None:
                 goal = screened
+        # V11 BUILDING-SHADOW escape. Hard prisms stop BOTH the squad's
+        # projectiles and sight; unlike tree camouflage this is full cover.
+        # Keep the goal for several seconds while the house bots retain
+        # their exact five-second shared tracking.
+        self.shadow_active=False
+        self.shadow_sheltered=False
+        if (self.shadow_goal is not None and now<self.shadow_until and
+                not urgent and not final and not own_laser_charging and
+                nearest>44 and not attacking_npcs and
+                hold_shadow(me,self.shadow_goal,enemies,zone,self.arena,
+                            started+.017)):
+            self.shadow_active=True
+        else:
+            self.shadow_goal=None
+        if (not self.shadow_active and focused and retreat and not urgent
+                and not final and now<160 and not attacking_npcs and
+                not own_laser_charging and me["grounded"] and nearest>45
+                and now-self.shadow_scan_at>1.1 and
+                time.perf_counter()<started+.016):
+            self.shadow_scan_at=now
+            candidate=self.shadow_atlas.search(
+                me,enemies,zone,self.arena,now,started+.027)
+            if candidate is not None:
+                self.shadow_goal=candidate[0]
+                self.shadow_until=now+7.2
+                self.shadow_active=True
+        if self.shadow_active:
+            self.foliage_active=False
+            goal=self.shadow_goal
+            objective=None
+            retreat=True
+            if distance(p,goal)<4 and not imminent_projectile(
+                    me,obs["projectiles"],zone):
+                self.shadow_sheltered=True
+                self.mode="HEAL"
+                self.recovering=True
+            else:
+                self.mode="EVADE"
+                self.recovering=False
+        elif (focused and retreat and not urgent and not final and
+              now<160 and not self.foliage_active and
+              self.cover is None and nearest<145):
+            # Fallback: reverse perpendicular motion near the gun's
+            # projectile flight time to defeat linear lead assumptions.
+            lateral=anti_lead(me,enemies,now,self.last_damage,zone)
+            if lateral is not None:
+                q=(p[0]+lateral[0]*12,p[1]+lateral[1]*12)
+                if (distance(q,zone["center"])<zone["radius"]-12 and
+                        self.arena.walk(p[:2],q,size)):
+                    goal=q
         if obs["offer"]:
             priorities = {"nanites": 100 if now < 340 else 35, "plating": 92, "servos": 77, "armor": 75,
                           "gun_mag": 74 if now < 205 else 61, "jets": 67 if now < 360 else 82,
@@ -1141,7 +1204,16 @@ class Bot:
             act["fire"]=[False,False]
             act["reload"]=False
             self.recovering=True
-        if not capture and me["grounded"] and d > 10 and not flight:
+        if self.shadow_sheltered and not urgent and not final and (
+                not imminent_projectile(me,obs["projectiles"],zone)):
+            # The objective is a real LOS break. Stay parked long enough
+            # to regenerate and expire the enemies' 5s shared target memory.
+            act["move"]=[0.,0.]
+            act["boost"]=False
+            act["jump"]=False
+            act["fire"]=[False,False]
+            act["reload"]=False
+        if not capture and not self.shadow_sheltered and me["grounded"] and d > 10 and not flight:
             if self.last_progress is None or distance(p, self.last_progress[1]) > 3:
                 self.last_progress = (now, p)
             elif now - self.last_progress[0] > 1 and me["energy"] > 43:
