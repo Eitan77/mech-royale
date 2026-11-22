@@ -61,6 +61,53 @@ class Tests(unittest.TestCase):
         bot.act(obs)
         self.assertEqual(bot.mode,"EVADE")
         self.assertEqual(bot.last_npc_damage,obs["t"])
+    def test_short_isolated_gun_pickoff_earns_placement(self):
+        bot,obs=self.sample()
+        p=obs["self"]["pos"]
+        obs["t"]=130
+        obs["alive"]=14
+        obs["self"]["hp"]=1300
+        obs["self"]["aim"]=[0,0]
+        obs["self"]["weapons"][0]["cooldown"]=0
+        obs["self"]["weapons"][0]["reload"]=0
+        obs["self"]["weapons"][0]["ammo"]=12
+        target={"id":8,"kind":"mech","pos":[p[0]+70,p[1],p[2]],
+                "vel":[0,0,0],"aim":[0,0],"weapons":["gun"],
+                "charging":False,"hp":100,"max_hp":1400,"cubes":0}
+        obs["mechs"]=[target]
+        bot.mode="TRAVEL"
+        bot.arena.shot=lambda *_:True
+        with patch("controller.shot_connects",return_value=True):
+            action={"tick":obs["tick"],"move":[0,0],"fire":[False,False]}
+            bot.combat(action,obs,
+                       (p[0],p[1],p[2]+obs["self"]["stats"]["muzzle_height"]),
+                       target,retreat=False,urgent=False,final=False,
+                       primary_threat=None)
+        self.assertTrue(action["fire"][0])
+    def test_pickoff_suppressed_when_ten_points_banked(self):
+        bot,obs=self.sample()
+        p=obs["self"]["pos"]
+        obs["t"]=340
+        obs["alive"]=6
+        obs["self"]["hp"]=1300
+        obs["self"]["aim"]=[0,0]
+        obs["self"]["weapons"][0]["cooldown"]=0
+        obs["self"]["weapons"][0]["reload"]=0
+        obs["self"]["weapons"][0]["ammo"]=12
+        target={"id":8,"kind":"mech","pos":[p[0]+70,p[1],p[2]],
+                "vel":[0,0,0],"aim":[0,0],"weapons":["gun"],
+                "charging":False,"hp":100,"max_hp":1400,"cubes":0}
+        obs["mechs"]=[target]
+        bot.mode="TRAVEL"
+        bot.arena.shot=lambda *_:True
+        with patch("controller.shot_connects",return_value=True):
+            action={"tick":obs["tick"],"move":[0,0],"fire":[False,False]}
+            bot.combat(action,obs,
+                       (p[0],p[1],p[2]+obs["self"]["stats"]["muzzle_height"]),
+                       target,retreat=False,urgent=False,final=False,
+                       primary_threat=None)
+        self.assertFalse(action["fire"][0])
+
     def test_safe_moderate_hp_bot_gathers_resources(self):
         bot,obs=self.sample()
         obs["self"]["hp"]=1050
