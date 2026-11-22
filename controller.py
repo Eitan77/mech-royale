@@ -84,7 +84,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "Arc Suppression"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -518,8 +518,7 @@ class Bot:
                 act["fire"][i] = angle_delta(mortar_aim[0], me["aim"][0]) < .035 and abs(mortar_aim[1] - me["aim"][1]) < .023
             elif kind == "lightning":
                 short_left = self.shorted_until.get(target["id"], -100) - obs["t"]
-                short = ("laser" in target.get("weapons", ())
-                         and (target.get("charging", False) or -.4 < short_left <= .22))
+                short = ("laser" in target.get("weapons", ()) and short_left <= .25)
                 reserve = 18 if retreat else 12
                 eligible = (not self.recovering and (offensive or return_fire or short) and d < stats["range"]
                             and weapon["cooldown"] <= .11 and
@@ -789,7 +788,7 @@ class Bot:
         kind = second["kind"] if second else None
         own_laser_charging = bool(kind=="laser" and second.get("charge",0)>0)
         weapon_values = dict(WEAPONS, laser=4 if nearest > 85 else 2,
-                             lightning=3, mortar=int(nearest > 50 and not any(
+                             lightning=5, mortar=int(nearest > 50 and not any(
                                  "laser" in e.get("weapons", ()) for e in enemies)))
         final = zone["next_radius"] <= 0
         goal = tuple(zone["next_center"])
@@ -1003,6 +1002,12 @@ class Bot:
                           "reactor": 60, "sensors": 49, "gyros": 48, "laser_damage": 62, "gun_rate": 59}
             choices = obs["offer"]["choices"]
             act["pick"] = upgrade_scoremax(choices, me, now, zone)
+            if kind == "lightning" and now < 325:
+                for upgrade in ("lightning_range", "lightning_efficiency"):
+                    index = next((i for i, choice in enumerate(choices) if choice["id"] == upgrade), None)
+                    if index is not None and choices[act["pick"]]["id"] not in ("nanites", "plating"):
+                        act["pick"] = index
+                        break
         pickups = [item for item in obs["pickups"] if distance(p, item["pos"]) < self.config["loot"]["pickup_radius"] - 0.1
                    and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
         if kind == "mortar" and laser_threat and not pickups:
@@ -1014,6 +1019,24 @@ class Bot:
             if second:
                 act["drop"] = slot
         capture = self.finish_capture(obs, enemies) if not urgent and not final else None
+        rush = None
+        if (kind == "lightning" and not capture and not urgent and not final and not attacking_npcs
+                and not retreat and visible is not None and len(threats) == 1 and hp > .78
+                and me["grounded"] and me["energy"] > 46 and "laser" in visible["weapons"]
+                and "mortar" not in visible["weapons"]):
+            reach = second["stats"]["range"]
+            q = visible["pos"]
+            gap = distance(p, q)
+            if .9 * reach < gap < reach + 19 and abs(q[2] - p[2]) < 5:
+                # Enter with enough margin to keep applying the short when
+                # the opponent walks away during our 0.25-second arc cycle.
+                fraction = (gap - .74 * reach) / gap
+                q = (p[0] + (q[0] - p[0]) * fraction, p[1] + (q[1] - p[1]) * fraction)
+                if (distance(q, zone["center"]) < zone["radius"] - 15
+                        and self.arena.shot(origin, self.target_body(visible))
+                        and self.arena.walk(p[:2], q, size)):
+                    goal, rush = q, visible
+                    objective = None
         if capture:
             goal = tuple(capture["pos"][:2])
             self.foliage_active = False
@@ -1052,6 +1075,8 @@ class Bot:
             flight, goal = self.cross_obstacle(act, me, goal, zone, size, now, started + .022)
         target = None
         if not flight:
+            if rush:
+                target = rush
             # A charging laser must retain its target while it slews/charges.
             if second and second["kind"] == "laser" and second.get("charge", 0) and self.laser_target is not None:
                 target = next((a for a in (*obs["mechs"], *obs["crates"])
@@ -1170,6 +1195,8 @@ class Bot:
                            p[0] + act["move"][0] * 17, p[1] + act["move"][1] * 17), size))
         reserve = energy_floor(me)
         if self.ground_boost.active(now, me["energy"], stats, reserve, safe_travel):
+            act["boost"] = True
+        if rush and not flight and straight > 9 and me["energy"] > 46:
             act["boost"] = True
         # Canopy approach: move quickly into optical cover, then stay silent
         # for the five-second shared tracking window. Do not fire/reload/
