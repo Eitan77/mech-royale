@@ -61,6 +61,51 @@ class Tests(unittest.TestCase):
         t={"kind":"mech","pos":[40,0,0],"hp":100,"max_hp":1400}
         self.assertTrue(opportunistic_kill(t,self.me,16,0))
         self.assertFalse(opportunistic_kill(t,self.me,16,3))
+    def test_silent_rear_laser_pickoff(self):
+        me=dict(self.me,
+                hp=1350,
+                weapons=[{"kind":"gun"},
+                         {"kind":"laser","stats":{"damage":315}}],
+                cubes=0)
+        enemy={"id":6,"kind":"mech","pos":[170.,0.,0.],
+               "aim":[0.,0.],"weapons":["gun","mortar"],
+               "hp":700,"max_hp":1400,"charging":False}
+        self.assertTrue(laser_ambush(me,enemy,[enemy],self.zone,170,12))
+    def test_ambush_rejects_already_aiming_enemy(self):
+        me=dict(self.me,hp=1350,
+                weapons=[{"kind":"gun"},{"kind":"laser","stats":{"damage":315}}],
+                cubes=0)
+        enemy={"id":6,"kind":"mech","pos":[170.,0.,0.],
+               "aim":[math.pi,0.],"weapons":["gun","mortar"],
+               "hp":700,"max_hp":1400,"charging":False}
+        self.assertFalse(laser_ambush(me,enemy,[enemy],self.zone,170,12))
+    def test_ambush_rejects_grouped_squad(self):
+        me=dict(self.me,hp=1350,
+                weapons=[{"kind":"gun"},{"kind":"laser","stats":{"damage":315}}],
+                cubes=0)
+        enemy={"id":6,"kind":"mech","pos":[170.,0.,0.],
+               "aim":[0.,0.],"weapons":["gun","mortar"],
+               "hp":700,"max_hp":1400,"charging":False}
+        guard=dict(enemy,id=7,pos=[170.,50.,0.])
+        self.assertFalse(laser_ambush(me,enemy,[enemy,guard],self.zone,170,12))
+    def test_ambush_does_not_assume_two_rear_hits(self):
+        me=dict(self.me,hp=1350,
+                weapons=[{"kind":"gun"},{"kind":"laser","stats":{"damage":315}}],
+                cubes=0)
+        enemy={"id":6,"kind":"mech","pos":[170.,0.,0.],
+               "aim":[0.,0.],"weapons":["gun"],
+               "hp":900,"max_hp":1400,"charging":False}
+        # First rear: 472.5; next facing forward: 315; 900 will survive.
+        self.assertFalse(laser_ambush(me,enemy,[enemy],self.zone,170,12))
+    def test_ambush_preserves_banked_10_points(self):
+        me=dict(self.me,hp=1350,
+                weapons=[{"kind":"gun"},{"kind":"laser","stats":{"damage":315}}],
+                cubes=0)
+        enemy={"id":6,"kind":"mech","pos":[170.,0.,0.],
+               "aim":[0.,0.],"weapons":["gun","mortar"],
+               "hp":600,"max_hp":1400,"charging":False}
+        self.assertFalse(laser_ambush(me,enemy,[enemy],self.zone,170,6))
+
     def test_probability_score_identity(self):
         self.assertAlmostEqual(expected_placement_proxy(16,[.8]*15),12.)
 
