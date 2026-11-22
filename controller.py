@@ -760,6 +760,7 @@ class Bot:
         slot = next((i for i, w in enumerate(me["weapons"]) if w and w["kind"] != "gun"), 1)
         second = me["weapons"][slot]
         kind = second["kind"] if second else None
+        own_laser_charging = bool(kind=="laser" and second.get("charge",0)>0)
         weapon_values = dict(WEAPONS, laser=4 if nearest > 85 else 2,
                              lightning=3, mortar=int(nearest > 50 and not any(
                                  "laser" in e.get("weapons", ()) for e in enemies)))
@@ -849,6 +850,7 @@ class Bot:
                 # distant FOV vision, even when a normal hard cover path
                 # is unavailable. Proximity sensors ignore the canopy.
                 if (not attacking_npcs and not charging_now and
+                        not own_laser_charging and
                         nearest>54 and hp<.82 and now<325 and
                         zone["next_radius"]>70 and me["grounded"]):
                     if (now-self.foliage_scan_at>1.5 and
@@ -923,6 +925,7 @@ class Bot:
                 me["in_zone"] and not attacking_npcs and nearest>=51 and
                 (hp<.96 or now-self.last_enemy_seen<5.6) and
                 not danger.get("charging") and
+                not own_laser_charging and
                 (now-self.last_damage>1.2 or
                  distance(p,self.foliage_goal)>4.)):
             self.foliage_active=True
@@ -933,6 +936,7 @@ class Bot:
                 retreat=True
                 self.recovering=True
         if self.foliage_active and (nearest<51 or attacking_npcs or
+                                    own_laser_charging or
                                     urgent or final or zone["dps"]>=100):
             self.foliage_active=False
             self.foliage_until=now
