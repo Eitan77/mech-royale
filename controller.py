@@ -11,6 +11,7 @@ from mobility import GroundBoost, defensive_yaw, jet_pulse, project_ascent, rear
 from tactics_v5 import (classify_danger, next_mode, candidate_resource_target,
                         energy_floor, zone_eta, should_commit_resource,
                         should_skirmish)
+from throne_v6 import defensive_contest, permit_stationary_laser
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -390,6 +391,11 @@ class Bot:
         is_rear_duel = target.get("kind") == "mech" and angle_delta(target["aim"][0], bearing(target["pos"], origin)) > 2.0
         offensive = not (urgent or final) and (not retreat or is_rear_duel) or finishing
         is_mech = target.get("kind") == "mech"
+        # V6 experiment: defending the tiny center is worth selective
+        # no-movement-penalty gunfire. Never chase far house bots.
+        final_guard = bool(final and defensive_contest(
+            me, target, obs["zone"], obs["t"], retreat, self.recovering))
+        offensive = offensive or final_guard
         if self.recovering:
             # Avoid dealing damage during genuine escape/heal phases:
             # one successful shot resets the five-second regen timer.
@@ -445,8 +451,11 @@ class Bot:
                         (not aligned and charge < max_hold)
                     ))
                 else:
+                    # Charging halves walk speed. In a final-center contest
+                    # only begin a laser shot once the center lock is secure.
                     act["fire"][i] = bool(offensive and not urgent and clear and allowed_pitch and error < 0.10
                                           and 2 < d < stats["range"] - 3 and weapon["cooldown"] <= 0.1
+                                          and (not final or permit_stationary_laser(me, obs["zone"]))
                                           and (target.get("kind") == "mech" or not primary_threat))
                     if act["fire"][i]:
                         self.laser_target = target["id"]
@@ -882,11 +891,20 @@ class Bot:
             scavenging = self.mode == "FARM" and objective is not None and (
                 objective[0] in ("cubes", "pickups", "drop"))
             if target is None and enemies and not scavenging:
+                # Defend the final center: search for competitors approaching
+                # the throne before choosing generic high-value duel targets.
+                contesting = []
+                if final:
+                    contesting = sorted(
+                        [a for a in enemies if distance(a["pos"], anchor) < 20],
+                        key=lambda a: distance(a["pos"], anchor))
                 candidates = sorted(enemies, key=lambda a: distance(p, a["pos"]) * .28
                              + min(40, estimates[a["id"]][0]) * 2 + min(1200, estimates[a["id"]][1]) * .02
                              - (rear_laser_bonus(a, p, self.config["sound"]["range"]["laser_charge"],
                                                  math.radians(self.config["vision"]["fov_deg"])) if kind == "laser" else 0)
                              - (55 if kind == "lightning" and a.get("charging") and distance(p, a["pos"]) < 44 else 0))
+                if contesting:
+                    candidates = contesting + [a for a in candidates if a not in contesting]
                 target = next((enemy for enemy in candidates[:3] if self.arena.shot(
                     origin, (*enemy["pos"][:2], enemy["pos"][2] + 4.5 * (1 + .05 * enemy.get("cubes", 0)))
                 )), candidates[0])
