@@ -18,6 +18,7 @@ from mechanics_v9 import (one_shot_laser_ambush, easy_laser_drone,
                           contest_center, storm_finish)
 from tactical_v10 import (imminent_projectile, sniper_choice,
                           resource_laser_silence)
+from throne_v6 import zone_future
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -84,7 +85,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "Exposure-Aware Routing"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -707,6 +708,63 @@ class Bot:
             return best
         return self.path[0] if self.path else (p[0] + math.cos(ideal), p[1] + math.sin(ideal))
 
+    def exposure_waypoint(self, me, waypoint, zone, threats, size, now, retreat, deadline):
+        """Choose a short route by exposure along the path as well as at its end."""
+        p, stats = me["pos"], me["stats"]
+        gap = distance(p, waypoint)
+        if gap < 7 or p[2] > self.arena.ground(*p[:2]) + 2:
+            return waypoint
+        speed = stats["walk_speed"]
+        duration = min(1.45, gap / speed)
+        samples = (.35 * duration, .72 * duration, duration)
+        circles = [zone_future(zone, now, step) for step in samples]
+        weapons = self.config["weapons"]
+        rear_mult = self.config["mech"]["rear_mult"]
+        projected = [[] for _ in samples]
+        for enemy, weight in threats[:3]:
+            actor = enemy["pos"]
+            is_mech = enemy["kind"] == "mech"
+            equipment = enemy.get("weapons", ())
+            reach = max((weapons[k].get("range", 170) for k in equipment), default=55)
+            muzzle = (7 * (1 + .05 * enemy.get("cubes", 0))) if is_mech else 2.8
+            velocity = enemy["vel"]
+            for i, step in enumerate(samples):
+                future = project_position(actor, velocity, min(step, .65))
+                projected[i].append(((*future[:2], future[2] + muzzle), reach, weight, enemy))
+        direction = bearing(p, waypoint)
+        best = None
+        for offset in (0., .55, -.55, 1.05, -1.05, 1.6, -1.6):
+            if time.perf_counter() >= deadline:
+                break
+            heading = direction + offset
+            axis = math.cos(heading), math.sin(heading)
+            points = [(p[0] + axis[0] * (step * speed), p[1] + axis[1] * (step * speed)) for step in samples]
+            end = points[-1]
+            if not self.arena.walk(p[:2], end, size):
+                continue
+            route_cost = 2.4 * (distance(end, waypoint) - gap)
+            if retreat:
+                route_cost *= .65
+            for i, point in enumerate(points):
+                if time.perf_counter() >= deadline:
+                    return best[1] if best else waypoint
+                center, radius = circles[i]
+                if distance(point, center) > radius:
+                    route_cost += .6 * zone["dps"]
+                z = self.arena.ground(*point) + .55 * stats["height"]
+                for muzzle, reach, weight, enemy in projected[i]:
+                    separation = distance(point, muzzle)
+                    if separation > reach or not self.arena.shot(muzzle, (*point, z)):
+                        continue
+                    facing = angle_delta(enemy["aim"][0], bearing(muzzle, point))
+                    rear = angle_delta(me["aim"][0], bearing(point, muzzle)) > math.pi / 2
+                    exposure = 19 if enemy.get("charging") else 7
+                    exposure *= weight * (1. if facing < .5 else .55)
+                    route_cost += exposure * ((rear_mult if rear else 1.) + max(0., 1 - separation / reach))
+            if best is None or route_cost < best[0]:
+                best = route_cost, end
+        return best[1] if best else waypoint
+
     def cross_obstacle(self, act, me, goal, zone, size, now, deadline):
         p, stats = me["pos"], me["stats"]
         if self.crossing is None:
@@ -1134,6 +1192,10 @@ class Bot:
         straight = 0.0
         if d > 0.18 or final and not me["grounded"]:
             waypoint = self.travel_waypoint(p, goal, size, now, started) if not flight and me["grounded"] else goal
+            if (threats and not capture and not flight and not final and not urgent
+                    and me["grounded"] and time.perf_counter() < started + .023):
+                waypoint = self.exposure_waypoint(me, waypoint, zone, threats, size, now,
+                                                  retreat, started + .027)
             straight = distance(p, waypoint)
             dx, dy = waypoint[0] - p[0], waypoint[1] - p[1]
             if (final or flight) and not me["grounded"]:
