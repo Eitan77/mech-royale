@@ -87,6 +87,53 @@ class IntegrationTests(unittest.TestCase):
         } for j in range(15)]
         self.action(obs)
 
+    def test_farm_mode_keeps_resource_route_and_target(self):
+        from unittest.mock import patch
+        obs=copy.deepcopy(self.observations[0])
+        p=obs["self"]["pos"]
+        obs["events"]=[]
+        obs["drops"]=[]
+        crate={"id":1201,"pos":[p[0],p[1]+40,p[2]],"hp":300}
+        obs["crates"]=[crate]
+        obs["mechs"]=[{
+            "id":7,"kind":"mech","pos":[p[0]+80,p[1],p[2]],
+            "vel":[0,0,0],"aim":[0,0],"hp":1400,"max_hp":1400,
+            "cubes":0,"weapons":["gun"],"charging":False
+        }]
+        bot=Bot(copy.deepcopy(self.hello))
+        bot.danger_cache={"exposed":0,"near":0,"lasers":0,
+                          "charging":0,"closest":80}
+        bot.danger_update=obs["t"]
+        bot.objective=lambda *args: ("crates",crate["id"],crate["pos"])
+        bot.resource_waypoint=lambda *args: crate["pos"][:2]
+        bot.arena.walk=lambda *args: True
+        bot.arena.shot=lambda *args: True
+        with patch("controller.choose_movement",side_effect=lambda arena,me,zone,move,*a,**kw:(move,False)):
+            act=bot.act(obs)
+        self.assertEqual(bot.mode,"FARM")
+        # The skirmish code previously reversed this direction to orbit an
+        # enemy 80m east, abandoning the crate 40m north.
+        self.assertGreater(act["move"][1],0.3)
+        self.assertLess(abs(act["move"][0]),.25)
+
+    def test_heal_does_not_fire_even_with_visible_enemy(self):
+        obs=copy.deepcopy(self.observations[0])
+        p=obs["self"]["pos"]
+        obs["self"]["hp"]=obs["self"]["max_hp"]*.5
+        obs["events"]=[]
+        obs["mechs"]=[{
+            "id":7,"kind":"mech","pos":[p[0]+70,p[1],p[2]],
+            "vel":[0,0,0],"aim":[0,0],"hp":1400,"max_hp":1400,
+            "cubes":0,"weapons":["gun"],"charging":False
+        }]
+        bot=Bot(copy.deepcopy(self.hello))
+        bot.danger_cache={"exposed":0,"near":1,"lasers":0,
+                          "charging":0,"closest":70}
+        bot.danger_update=obs["t"]
+        act=bot.act(obs)
+        self.assertTrue(bot.recovering)
+        self.assertFalse(any(act["fire"]))
+
     def test_final_center_observation_does_not_crash(self):
         obs=copy.deepcopy(self.observations[0])
         obs["t"]=397
