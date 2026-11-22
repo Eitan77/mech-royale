@@ -12,6 +12,8 @@ from tactics_v5 import (classify_danger, next_mode, candidate_resource_target,
                         energy_floor, zone_eta, should_commit_resource,
                         should_skirmish)
 from throne_v6 import defensive_contest, permit_stationary_laser
+from strategy_v7 import (situational_danger, mode_v7, deliberate_mech_fire,
+                         should_silence, silence_movement, upgrade_v7)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -396,6 +398,11 @@ class Bot:
         final_guard = bool(final and defensive_contest(
             me, target, obs["zone"], obs["t"], retreat, self.recovering))
         offensive = offensive or final_guard
+        if is_mech and not final_guard and not deliberate_mech_fire(
+                me, target, self.mode, obs["t"], self.last_damage, obs["zone"]):
+            # No free placement points for 140m potshots; do not trigger
+            # the entire cooperative practice squad unnecessarily.
+            offensive = False
         if self.recovering:
             # Avoid dealing damage during genuine escape/heal phases:
             # one successful shot resets the five-second regen timer.
@@ -403,7 +410,9 @@ class Bot:
         # Running and firing the arm gun are independent. Only preserve silence
         # for an actual disengagement or committed final-circle recovery.
         return_fire = (is_mech and (not final or urgent) and d < 225
-                       and not retreat and not self.recovering)
+                       and not retreat and not self.recovering and
+                       deliberate_mech_fire(me, target, self.mode, obs["t"],
+                                           self.last_damage, obs["zone"]))
         gun_clear = clear if aim_point == lead else self.arena.shot(origin, lead)
         gun_aligned = bool(gun and gun.get("reload", 0) <= .1 and gun["cooldown"] <= .11
                            and (gun_clear or d < 35)
@@ -742,17 +751,18 @@ class Bot:
         charging_now = any(a.get("charging") for a in enemies)
         if (self.danger_cache is None or now-self.danger_update > .25 or charging_now):
             if time.perf_counter() < started + .014:
-                self.danger_cache = classify_danger(me, enemies, self.arena)
+                self.danger_cache = situational_danger(me, enemies, self.arena)
                 self.danger_update = now
         danger = self.danger_cache or {
             "exposed":len(threats), "near":len(threats),
-            "lasers":0, "charging":int(charging_now), "closest":nearest}
-        laser_threat = danger["lasers"] > 0
+            "close":sum(distance(p,e["pos"])<60 for e in enemies),
+            "laser_exposed":0,"charged_exposed":int(charging_now),
+            "aimed_exposed":0,"closest":nearest}
+        laser_threat = danger["laser_exposed"] > 0
         estimates = {enemy["id"]: duel(me, enemy, self.config["weapons"], len(threats)) for enemy in enemies}
-        new_mode = next_mode(self.mode, hp, danger, urgent, now,
-                             self.last_damage, self.last_hit,
-                             has_objective=self.resource_lock is not None,
-                             has_cover=danger["exposed"] == 0)
+        new_mode = mode_v7(self.mode, hp, danger, urgent, now,
+                           self.last_damage, self.last_hit,
+                           has_resource=self.resource_lock is not None)
         if new_mode != self.mode:
             self.mode, self.mode_since = new_mode, now
         retreat = self.mode in ("EVADE", "HEAL")
@@ -781,7 +791,9 @@ class Bot:
                                - 0.95 * distance(q, visible["pos"]) - (6 if q == options[0] and laser_threat else 0))
         elif (not urgent and not final and self.mode in ("TRAVEL", "FARM") and
               (danger["exposed"] == 0 or
-               danger["exposed"] == 1 and nearest > 130 and not laser_threat and hp > .8) and
+               danger["exposed"] == 1 and danger["aimed_exposed"] == 0 and
+               danger["charged_exposed"] == 0 and nearest > 110 and
+               not laser_threat and hp > .77) and
               time.perf_counter() < started + 0.013):
             objective = self.objective(obs, enemies, kind, p, zone, now, weapon_values)
             if objective:
@@ -796,7 +808,8 @@ class Bot:
                 phase = int(now / 9) * 2.399963 + me["id"]
                 radius = min(75, zone["next_radius"] * 0.48)
                 goal = (cx + math.cos(phase) * radius, cy + math.sin(phase) * radius)
-        if should_skirmish(self.mode, visible, retreat, urgent, final, nearest):
+        if self.mode == "FIGHT" and should_skirmish(
+                self.mode, visible, retreat, urgent, final, nearest):
             # Fight while moving across the enemy's aim, with an outward bias
             # against short-range weapons and an inward bias with our lightning.
             enemy_pos = visible["pos"]
@@ -829,7 +842,7 @@ class Bot:
                           "lightning_range": 70, "gun_damage": 65, "laser_charge": 66, "capacitor": 65,
                           "reactor": 60, "sensors": 49, "gyros": 48, "laser_damage": 62, "gun_rate": 59}
             choices = obs["offer"]["choices"]
-            act["pick"] = max(range(len(choices)), key=lambda i: priorities.get(choices[i]["id"], 40))
+            act["pick"] = upgrade_v7(choices, me, now)
         pickups = [item for item in obs["pickups"] if distance(p, item["pos"]) < self.config["loot"]["pickup_radius"] - 0.1
                    and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
         if kind == "mortar" and laser_threat and not pickups:
@@ -978,9 +991,18 @@ class Bot:
         reserve = energy_floor(me)
         if self.ground_boost.active(now, me["energy"], stats, reserve, safe_travel):
             act["boost"] = True
-        # Do not slow to 38% speed merely two seconds after taking damage.
-        # The practice squad can still share exact tracking during this period.
-        if not capture and me["grounded"] and d > 10 and not flight:
+        # Behind hard cover, do not advertise our position with footsteps
+        # while waiting for the regeneration timer. Preserve zone timing.
+        quiet = (danger["exposed"] == 0 and nearest > 45 and
+                 should_silence(me, self.mode, zone, now, self.last_damage,
+                                urgent))
+        if quiet:
+            future_margin = zone["next_radius"] - distance(p,zone["next_center"])
+            hold = future_margin > 10
+            act["move"] = silence_movement(me, act["move"], hold=hold)
+            act["boost"] = False
+            act["jump"] = False
+        if not capture and not quiet and me["grounded"] and d > 10 and not flight:
             if self.last_progress is None or distance(p, self.last_progress[1]) > 3:
                 self.last_progress = (now, p)
             elif now - self.last_progress[0] > 1 and me["energy"] > 43:
