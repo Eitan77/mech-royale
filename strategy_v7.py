@@ -173,7 +173,8 @@ def healing_supply_drop(me,drops,enemies,zone,now):
         return None
     if not drops:return None
     best=None
-    best_score=-1e9
+    # A safe drop must genuinely beat waiting for natural regeneration.
+    best_score=25.0
     for drop in drops:
         if drop.get("holder") not in (None,me["id"]):continue
         pos=drop["pos"]
