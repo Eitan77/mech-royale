@@ -44,13 +44,19 @@ class Tests(unittest.TestCase):
         o["self"]["hp"]=1390
         o["t"]=170
         o["alive"]=12
+        # Keep the observation internally consistent at t=170. A t=170
+        # action should not be evaluated against the t=25 storm schedule.
+        p=o["self"]["pos"]
+        o["zone"].update(center=p[:2],radius=320.,
+                         next_center=p[:2],next_radius=240.,
+                         shrink_start=155.,shrink_end=195.,dps=35)
         target=self.target(o,170,0,320)
         o["mechs"]=[target]
         bot.arena.shot=lambda *args:True
         bot.arena.walk=lambda *args:True
         with patch("controller.shot_connects",return_value=True):
             act=bot.act(o)
-            self.assertTrue(act["fire"][1])
+            self.assertTrue(act["fire"][1],msg=f"first action={act}, mode={bot.mode}, ambush_id={bot.ambush_target_id}")
             self.assertFalse(act["fire"][0])
             self.assertEqual(bot.ambush_target_id,7)
             o2=copy.deepcopy(o)
