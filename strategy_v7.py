@@ -160,3 +160,39 @@ def upgrade_v7(choices,me,now):
       "mortar_velocity":32
     }
     return max(range(len(choices)),key=lambda i:scores.get(choices[i]["id"],40))
+
+
+def healing_supply_drop(me,drops,enemies,zone,now):
+    """An uncontested drop may heal more HP than ~20s of passive regen.
+
+    Select only when it is close, safe, in the future circle, and landing
+    soon enough to justify temporarily leaving a recovery location.
+    """
+    frac=me["hp"]/max(1.,me["max_hp"])
+    if frac>=.82 or not me.get("in_zone",True) or zone["next_radius"]<=0:
+        return None
+    if not drops:return None
+    best=None
+    best_score=-1e9
+    for drop in drops:
+        if drop.get("holder") not in (None,me["id"]):continue
+        pos=drop["pos"]
+        d=dist(me["pos"],pos)
+        if d>75:continue
+        if dist(pos,zone["next_center"])>zone["next_radius"]-5:
+            continue
+        # A visible opponent within sprinting distance could freeze capture.
+        if any(dist(e["pos"],pos)<85 for e in enemies):
+            continue
+        eta=d/max(1.,me["stats"]["walk_speed"]*.76)
+        landing=max(0.,drop["lands_in"])
+        if landing>max(20.,eta+12.):continue
+        capture=max(0.,drop["capture_s"]-drop.get("progress",0.))
+        finish=max(eta,landing)+capture
+        if now+finish+4>zone["shrink_end"] and dist(pos,zone["next_center"])>zone["next_radius"]-18:
+            continue
+        score=200.*(1-frac)-1.4*d-0.8*max(0,landing-eta)
+        if drop.get("holder")==me["id"]:score+=80
+        if score>best_score:
+            best,best_score=drop,score
+    return best
