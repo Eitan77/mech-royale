@@ -14,6 +14,8 @@ from tactics_v5 import (classify_danger, next_mode, candidate_resource_target,
 from scoremax_v8 import (npc_pressure, immediate_npc_escape,
                          upgrade_scoremax)
 from foliage_v9 import Foliage, should_ghost, stealth_vector
+from mechanics_v9 import (one_shot_laser_ambush, easy_laser_drone,
+                          contest_center, storm_finish)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -405,6 +407,13 @@ class Bot:
         is_rear_duel = target.get("kind") == "mech" and angle_delta(target["aim"][0], bearing(target["pos"], origin)) > 2.0
         offensive = not (urgent or final) and (not retreat or is_rear_duel) or finishing
         is_mech = target.get("kind") == "mech"
+        final_guard = (is_mech and contest_center(
+            me,target,obs["zone"],obs["t"],retreat))
+        all_mechs=[a for a in obs["mechs"] if a["kind"]=="mech"]
+        ambush = (is_mech and not retreat and not urgent and not final and
+                  one_shot_laser_ambush(me,target,all_mechs,obs["zone"],
+                                       obs["t"],obs["alive"]))
+        offensive = offensive or final_guard or ambush
         if self.recovering:
             # Avoid dealing damage during genuine escape/heal phases:
             # one successful shot resets the five-second regen timer.
@@ -420,9 +429,16 @@ class Bot:
         mortar = next((w for w in me["weapons"] if w and w["kind"] == "mortar"), None)
         zone = obs["zone"]
         outward = abs(distance(target["pos"], zone["center"]) - zone["radius"]) < 13
+        mortar_finisher = (bool(mortar) and is_mech and
+                           storm_finish(me,target,all_mechs,zone,obs["alive"]))
         mortar_aim = None
-        if (mortar and is_mech and not urgent and "laser" not in target.get("weapons", ())
-                and not self.recovering and (outward or not gun_clear and not retreat) and d < 145 and mortar["cooldown"] <= .35):
+        if (mortar and is_mech and not urgent and not ambush and
+                "laser" not in target.get("weapons", ())
+                and not self.recovering and
+                ((mortar_finisher and not retreat) or
+                 (d<100 and not gun_clear and not retreat) or
+                 (d<75 and outward and me["hp"]>.85*me["max_hp"]))
+                and d < 145 and mortar["cooldown"] <= .35):
             mortar_aim = mortar_shot(self.arena, (*origin[:2], me["pos"][2] + me["stats"]["height"] + .5),
                                      target["pos"], target["vel"], mortar["stats"], zone, outward)
             if mortar_aim and cfg["min_pitch"] <= mortar_aim[1] <= cfg["max_pitch"]:
@@ -435,7 +451,10 @@ class Bot:
                 continue
             kind, stats = weapon["kind"], weapon["stats"]
             if kind == "gun":
-                act["fire"][i] = bool((offensive or return_fire) and gun_aligned)
+                # Hold the loud 320m-carry gun during a 140m-silent
+                # rear-laser ambush, even when we otherwise could potshot.
+                act["fire"][i] = bool((offensive or return_fire) and
+                                      not ambush and gun_aligned)
             elif kind == "mortar" and mortar_aim:
                 act["fire"][i] = angle_delta(mortar_aim[0], me["aim"][0]) < .035 and abs(mortar_aim[1] - me["aim"][1]) < .023
             elif kind == "lightning":
