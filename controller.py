@@ -14,7 +14,7 @@ from tactics_v5 import (classify_danger, next_mode, candidate_resource_target,
 from throne_v6 import defensive_contest, permit_stationary_laser
 from strategy_v7 import (situational_danger, mode_v7, deliberate_mech_fire,
                          should_silence, silence_movement, upgrade_v7,
-                         healing_supply_drop)
+                         healing_supply_drop, nearest_legal_final_ground)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -123,6 +123,9 @@ class Bot:
         self.danger_update = -100.0
         self.zone_eta_cache = (None, -100.0)
         self.last_enemy_seen = -100.0
+        self.final_ground_anchor = None
+        self.final_ground_at = -100.0
+        self.final_ground = None
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -580,6 +583,17 @@ class Bot:
             act["jump"] = bool(me["grounded"])
             act["boost"] = not me["grounded"] and jet_pulse(me["vel"][2], energy, stats)
             return True, anchor
+        # A building/stadium can cover the exact last center. If we cannot
+        # reach its roof, move to the closest legal perimeter instead of
+        # routing forever toward a point inside solid geometry.
+        if needs_roof and self.roof_plan is None:
+            if (self.final_ground_anchor != anchor or
+                    now-self.final_ground_at > 2.0):
+                self.final_ground_anchor, self.final_ground_at = anchor,now
+                self.final_ground = nearest_legal_final_ground(
+                    self.arena,p,anchor,size,time.perf_counter()+.004)
+            if self.final_ground is not None:
+                return False,self.final_ground
         return False, goal
 
     def travel_waypoint(self, p, goal, size, now, start):
