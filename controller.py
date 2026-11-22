@@ -101,6 +101,10 @@ class Bot:
         self.landing = None
         self.evade_side = 1
         self.evade_until = 0
+        self.shorted_until = {}
+        self.refuge = None
+        self.refuge_scan = -100
+        self.recovering = False
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -120,8 +124,11 @@ class Bot:
                     self.damage_bearing = event["bearing"]
             elif kind == "hit":
                 self.last_hit = now
+                if event.get("effect") == "short":
+                    self.shorted_until[event["target"]] = now + self.config["weapons"]["lightning"]["short_s"]
             elif kind == "kill":
                 self.memory["mechs"].pop(event["target"], None)
+                self.shorted_until.pop(event["target"], None)
             elif kind in ("took", "take_failed") and event.get("reason") in (None, "gone", "have"):
                 self.memory["pickups"].pop(event["id"], None)
 
@@ -153,6 +160,39 @@ class Bot:
         self.cover = best
         return best
 
+    def recovery_roof(self, me, threats, zone, size, now, deadline):
+        p = me["pos"]
+        if self.refuge and distance(p, self.refuge) < 75:
+            q = self.refuge
+            if (distance(q, zone["next_center"]) < zone["next_radius"] - 5
+                    and all(distance(q, e["pos"]) > 9 or q[2] - e["pos"][2] > 9 for e, _ in threats[:3])):
+                return q
+        self.refuge = None
+        if now - self.refuge_scan < 1 or me["energy"] < 58:
+            return None
+        self.refuge_scan = now
+        candidates = sorted((q for q in self.arena.rooftops if 8 < q[2] - p[2] < 25 and
+                             distance(q, p) < 40 and distance(q, zone["next_center"]) < zone["next_radius"] - 12),
+                            key=lambda q: distance(q, p) + .4 * (q[2] - p[2]))
+        for q in candidates[:5]:
+            if time.perf_counter() >= deadline:
+                break
+            if not self.arena.clear(*q, 2.5 * size, 9 * size):
+                continue
+            approaching = [e for e, _ in threats[:3] if distance(e["pos"], p) < 115]
+            if not approaching:
+                break
+            sheltered = 0
+            for enemy in approaching:
+                x, y, z = enemy["pos"]
+                muzzle = (x, y, z + 7 * (1 + .05 * enemy.get("cubes", 0)))
+                if not self.arena.shot(muzzle, (q[0], q[1], q[2] + 2)):
+                    sheltered += 1
+            if sheltered == len(approaching):
+                self.refuge = q
+                return q
+        return None
+
     def objective(self, obs, enemies, weapon, p, zone, now, weapon_values):
         best, best_score = None, 0
         hp = obs["self"]["hp"] / obs["self"]["max_hp"]
@@ -173,7 +213,17 @@ class Bot:
             contested = any(distance(e["pos"], q) < drop["radius"] + 10 for e in enemies)
             if not contested and drop["holder"] in (None, obs["self"]["id"]) and d < 125:
                 eta = travel(q, d)
-                score = 17 + (1 - hp) * 36 - 2.3 * eta - 0.6 * max(0, drop["lands_in"] - eta - 3)
+                enemy_eta = min((distance(e["pos"], q) / stats["boost_speed"] for e in enemies),
+                                default=math.inf)
+                capture_window = max(eta, drop["lands_in"]) + drop["capture_s"]
+                if enemy_eta + 1.5 < capture_window and drop["holder"] != obs["self"]["id"]:
+                    continue
+                full_heal = (1 - hp) * 43
+                breakpoint = 8 if any(count < threshold <= count + 3
+                                      for threshold in self.config["cubes"]["upgrade_thresholds"]) else 0
+                score = 31 + full_heal + breakpoint - 2.3 * eta - 0.8 * max(0, drop["lands_in"] - eta - 5)
+                if drop["holder"] == obs["self"]["id"]:
+                    score += 14 + 3 * drop["progress"]
                 if score > best_score:
                     best, best_score = ("drop", drop["id"], q), score
         for group in ("cubes", "pickups", "crates", "mechs"):
@@ -261,9 +311,11 @@ class Bot:
         is_rear_duel = target.get("kind") == "mech" and angle_delta(target["aim"][0], bearing(target["pos"], origin)) > 2.0
         offensive = not (urgent or final) and (not retreat or is_rear_duel) or finishing
         is_mech = target.get("kind") == "mech"
+        if self.recovering and not finishing:
+            offensive = False
         # Running and firing the arm gun are independent. Only preserve silence
         # for an actual disengagement or committed final-circle recovery.
-        return_fire = is_mech and (not final or urgent) and d < 225
+        return_fire = is_mech and (not final or urgent) and d < 225 and (not self.recovering or finishing)
         gun_clear = clear if aim_point == lead else self.arena.shot(origin, lead)
         gun_aligned = bool(gun and gun.get("reload", 0) <= .1 and gun["cooldown"] <= .11
                            and (gun_clear or d < 35)
@@ -273,7 +325,7 @@ class Bot:
         outward = abs(distance(target["pos"], zone["center"]) - zone["radius"]) < 13
         mortar_aim = None
         if (mortar and is_mech and not urgent and "laser" not in target.get("weapons", ())
-                and (outward or not gun_clear and not retreat) and d < 145 and mortar["cooldown"] <= .35):
+                and not self.recovering and (outward or not gun_clear and not retreat) and d < 145 and mortar["cooldown"] <= .35):
             mortar_aim = mortar_shot(self.arena, (*origin[:2], me["pos"][2] + me["stats"]["height"] + .5),
                                      target["pos"], target["vel"], mortar["stats"], zone, outward)
             if mortar_aim and cfg["min_pitch"] <= mortar_aim[1] <= cfg["max_pitch"]:
@@ -290,7 +342,9 @@ class Bot:
             elif kind == "mortar" and mortar_aim:
                 act["fire"][i] = angle_delta(mortar_aim[0], me["aim"][0]) < .035 and abs(mortar_aim[1] - me["aim"][1]) < .023
             elif kind == "lightning":
-                short = target.get("charging", False) and "laser" in target.get("weapons", ())
+                short_left = self.shorted_until.get(target["id"], -100) - obs["t"]
+                short = ("laser" in target.get("weapons", ())
+                         and (target.get("charging", False) or -.4 < short_left <= .22))
                 reserve = 18 if retreat else 12
                 eligible = ((offensive or return_fire or short) and d < stats["range"]
                             and weapon["cooldown"] <= .11 and
@@ -443,6 +497,7 @@ class Bot:
                 a, _ = min(old, key=lambda entry: distance(p, entry[0]["pos"]))
                 threats.append((a, 1.3))
         nearest = min((distance(p, a["pos"]) for a in enemies), default=999)
+        self.recovering = False
         slot = next((i for i, w in enumerate(me["weapons"]) if w and w["kind"] != "gun"), 1)
         second = me["weapons"][slot]
         kind = second["kind"] if second else None
@@ -525,6 +580,14 @@ class Bot:
                 if distance(q, zone["center"]) < zone["radius"] - 18 and self.arena.walk(p[:2], q, size):
                     goal = q
                     break
+        if retreat and not urgent and not final and hp > .38 and nearest > 23:
+            safe_cubes = [cube["pos"] for cube in obs["cubes"]
+                          if 3 < distance(p, cube["pos"]) < 9 and abs(p[2] - cube["pos"][2]) < 3.8
+                          and distance(cube["pos"], zone["next_center"]) < zone["next_radius"]
+                          and all(distance(cube["pos"], e["pos"]) > 18 for e, _ in threats[:3])
+                          and self.arena.walk(p[:2], cube["pos"][:2], size)]
+            if safe_cubes:
+                goal = min(safe_cubes, key=lambda q: distance(q, p))[:2]
         if retreat and visible and not urgent and not final and objective is None and time.perf_counter() < started + .014:
             screened = storm_screen(self.arena, p, visible, zone, size, started + .016)
             if screened is not None:
@@ -557,6 +620,23 @@ class Bot:
                 flight, goal = self.final_movement(act, me, [], p, tuple(elevated[:2]), goal,
                                                    self.arena.roof(*elevated[:2]), max(18, remain),
                                                    zone, size, now, started + .019)
+        if retreat and not final and not urgent and hp < .68 and time.perf_counter() < started + .017:
+            refuge = self.recovery_roof(me, threats, zone, size, now, started + .019)
+            if refuge is not None:
+                q = tuple(refuge[:2])
+                level = self.arena.roof(*q)
+                if p[2] >= level - .3 and distance(p, q) < 4 and me["grounded"]:
+                    goal = q
+                    self.recovering = True
+                else:
+                    airborne, safe_goal = self.final_movement(
+                        act, me, [], p, q, q, level, max(18, remain), zone, size, now, started + .022
+                    )
+                    if airborne or self.roof_plan:
+                        flight, goal = airborne, safe_goal
+                        self.recovering = True
+        elif not retreat or hp > .8:
+            self.refuge = None
         target = None
         if not flight:
             if enemies:
@@ -637,7 +717,7 @@ class Bot:
             length = math.hypot(dx, dy)
             divisor = max(6 if flight and final else 3.3, length)
             act["move"] = [dx / divisor, dy / divisor]
-        if not flight and me["grounded"] and (not final or urgent) and time.perf_counter() < started + 0.028:
+        if not flight and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:
             direction, tactical_boost = choose_movement(
                 self.arena, me, zone, act["move"], threats, obs["projectiles"], size, urgent, started + 0.032
             )

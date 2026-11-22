@@ -48,11 +48,16 @@ class Arena:
         if sys.byteorder != "little":
             self.heights.byteswap()
         self.bins = defaultdict(list)
+        self.rooftops = []
         for prism in world["prisms"]:
             ring = tuple(zip(prism["ring"][::2], prism["ring"][1::2]))
             holes = tuple(tuple(zip(hole[::2], hole[1::2])) for hole in prism["holes"])
             solid = (prism["base"], prism["top"], ring, holes)
             xs, ys = zip(*ring)
+            if prism["kind"] != "bridge" and min(max(xs) - min(xs), max(ys) - min(ys)) >= 11:
+                x, y = (min(xs) + max(xs)) * .5, (min(ys) + max(ys)) * .5
+                if inside(x, y, ring) and not any(inside(x, y, h) for h in holes):
+                    self.rooftops.append((x, y, prism["top"]))
             for i in range(math.floor(min(xs) / 16), math.floor(max(xs) / 16) + 1):
                 for j in range(math.floor(min(ys) / 16), math.floor(max(ys) / 16) + 1):
                     self.bins[i, j].append(solid)
