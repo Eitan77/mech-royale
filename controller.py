@@ -395,7 +395,8 @@ class Bot:
             offensive = False
         # Running and firing the arm gun are independent. Only preserve silence
         # for an actual disengagement or committed final-circle recovery.
-        return_fire = is_mech and (not final or urgent) and d < 225 and not self.recovering
+        return_fire = (is_mech and (not final or urgent) and d < 225
+                       and not retreat and not self.recovering)
         gun_clear = clear if aim_point == lead else self.arena.shot(origin, lead)
         gun_aligned = bool(gun and gun.get("reload", 0) <= .1 and gun["cooldown"] <= .11
                            and (gun_clear or d < 35)
@@ -745,7 +746,10 @@ class Bot:
         if new_mode != self.mode:
             self.mode, self.mode_since = new_mode, now
         retreat = self.mode in ("EVADE", "HEAL")
-        self.recovering = retreat
+        # EVADE is active defense, not a regeneration hold. Permit a
+        # close-range lightning short to stop a charging laser. Only HEAL
+        # requires absolute no-fire discipline to restart regeneration.
+        self.recovering = self.mode == "HEAL"
         objective = None
         if retreat and threats and not urgent and (not final or distance(p, goal) < 6 and remain > 20):
             cover = self.cover_point(p, threats, zone, size, anchor, now, started + 0.009)
