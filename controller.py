@@ -1147,8 +1147,13 @@ class Bot:
         if center_lock:
             act["move"] = self.center_control(me, anchor)
         if not center_lock and not flight and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:
+            holding_laser = kind == "laser" and act["fire"][slot] and (
+                own_laser_charging or second["cooldown"] <= .1
+            )
+            speed_scale = self.config["mech"]["charge_move_mult"] if holding_laser else 1.0
             direction, tactical_boost = choose_movement(
-                self.arena, me, zone, act["move"], threats, obs["projectiles"], size, urgent, started + 0.032, capture, now
+                self.arena, me, zone, act["move"], threats, obs["projectiles"],
+                size, urgent, started + 0.032, capture, now, speed_scale=speed_scale,
             )
             act["move"] = list(direction)
             emergency_storm = not me["in_zone"] or (zone["dps"] >= 100 and margin < 3)

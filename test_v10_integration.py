@@ -4,10 +4,12 @@ import gzip
 import json
 import math
 import os
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 from controller import Bot
+from pilot import choose_movement
 
 KIT=Path(os.environ.get("MECH_KIT","/tmp/mech-kit/mechfight-kit"))
 
@@ -203,7 +205,7 @@ class Tests(unittest.TestCase):
                     bot.arena.shot = lambda *args: True
                     bot.arena.walk = lambda *args: True
                     with patch.object(bot, "travel_waypoint", side_effect=lambda _, goal, *_args: goal), patch(
-                        "controller.choose_movement", side_effect=lambda _arena, _me, _zone, move, *_args: (move, False)
+                        "controller.choose_movement", side_effect=lambda _arena, _me, _zone, move, *_args, **_kwargs: (move, False)
                     ):
                         act = bot.act(obs)
                     self.assertGreater(toward * act["move"][0], .25)
@@ -244,5 +246,24 @@ class Tests(unittest.TestCase):
                 action = {"fire": [False, False]}
                 bot.combat(action, obs, origin, enemy, False, False, False, enemy)
                 self.assertAlmostEqual(action["aim"][0], math.atan2(-15 * delay, 100))
+
+    def test_laser_charge_movement_rollout_uses_half_walk_speed(self):
+        bot, obs = self.start()
+        me = obs["self"]
+        p = me["pos"]
+        speed = me["stats"]["walk_speed"]
+        scale = self.hello["config"]["mech"]["charge_move_mult"]
+        me.update(grounded=True, energy=0., vel=[speed * scale, 0., 0.])
+        obs["zone"].update(center=p[:2], radius=320.)
+        endpoints = []
+
+        def record_walk(_start, end, _size):
+            endpoints.append(end)
+            return True
+
+        bot.arena.walk = record_walk
+        choose_movement(bot.arena, me, obs["zone"], [1., 0.], [], [], 1.,
+                        True, time.perf_counter() + .05, speed_scale=scale)
+        self.assertAlmostEqual(endpoints[0][0] - p[0], speed * scale * .6)
 
 if __name__=="__main__":unittest.main()

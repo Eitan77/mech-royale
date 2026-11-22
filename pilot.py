@@ -20,7 +20,8 @@ def forecast_circles(zone, now):
     return circles
 
 
-def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, deadline, capture=None, now=None):
+def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, deadline,
+                    capture=None, now=None, speed_scale=1.0):
     p, velocity, stats = me["pos"], me["vel"], me["stats"]
     if not me["grounded"] or not urgent and not threats and not projectiles:
         return move, False
@@ -78,7 +79,7 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
         for boost in (False, True) if (urgent or incoming or charger is not None) and me["energy"] > 21 and mag > 0.1 else (False,):
             if time.perf_counter() >= deadline:
                 return best
-            speed = stats["boost_speed"] if boost else stats["walk_speed"]
+            speed = speed_scale * (stats["boost_speed"] if boost else stats["walk_speed"])
             vx, vy = velocity[0], velocity[1]
             x, y = p[:2]
             samples = []
