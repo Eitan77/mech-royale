@@ -81,7 +81,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "clover-v4-integrated"
+    name = "clover-v7-ghost-throne"
 
     def __init__(self, hello):
         self.config = hello["config"]
