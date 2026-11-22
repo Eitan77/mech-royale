@@ -10,7 +10,7 @@ import math
 def distance(a,b):
     return math.hypot(a[0]-b[0],a[1]-b[1])
 
-def npc_pressure(me,visible,arena,now,last_npc_damage=-999):
+def npc_pressure(me,visible,arena,now,last_npc_damage=-999,chasing_npc_id=None):
     """Risk that a drone prevents regeneration with 1s NPC bullets.
 
     NPCs can attack any mech within 45m of their home, and chase out to
@@ -24,7 +24,8 @@ def npc_pressure(me,visible,arena,now,last_npc_damage=-999):
                    key=lambda e:distance(p,e["pos"]))[:5]
     for e in visible:
         d=distance(p,e["pos"])
-        limit=90 if recent else 48
+        limit=90 if recent and (chasing_npc_id is None or
+                              e.get("id")==chasing_npc_id) else 48
         if d>limit:continue
         eye=(e["pos"][0],e["pos"][1],e["pos"][2]+2.8)
         body=(p[0],p[1],p[2]+.5*me["stats"]["height"])
@@ -59,7 +60,10 @@ def mode_v8(previous,hp,danger,urgent,now,last_damage,last_hit,
                    and not danger.get("charged_exposed",0)
                    and (not danger.get("laser_exposed",0)
                         or danger.get("closest",999)>155))
-    if resource_safe and hp>=.58:
+    # Once 10 opponents are eliminated, we have already banked 10 points.
+    # Late resource greed is not worth risking that placement for marginal cubes.
+    # Keep healing or moving toward the next circle instead.
+    if resource_safe and hp>=.58 and not (alive<=6 and now>220):
         return "FARM"
     if previous=="HEAL" and hp<.82 and exposed==0 and not resource_safe:
         return "HEAL"
