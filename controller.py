@@ -16,7 +16,7 @@ from strategy_v7 import (situational_danger, mode_v7, deliberate_mech_fire,
                          should_silence, silence_movement, upgrade_v7,
                          healing_supply_drop, nearest_legal_final_ground)
 from scoremax_v8 import (npc_pressure, mode_v8, immediate_npc_escape,
-                         opportunistic_kill)
+                         opportunistic_kill, laser_ambush)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -410,7 +410,14 @@ class Bot:
         final_guard = bool(final and defensive_contest(
             me, target, obs["zone"], obs["t"], retreat, self.recovering))
         offensive = offensive or final_guard
-        if is_mech and not final_guard and not deliberate_mech_fire(
+        # An isolated nearly finishable backshot from beyond audible charge
+        # range is valuable; a distant open-ended gunfight is not.
+        ambush = (is_mech and not retreat and not urgent and not final and
+                  self.mode in ("TRAVEL","FIGHT") and
+                  laser_ambush(me, target,
+                              [e for e in obs["mechs"] if e["kind"]=="mech"],
+                              obs["zone"], obs["t"], obs["alive"]))
+        if is_mech and not final_guard and not ambush and not deliberate_mech_fire(
                 me, target, self.mode, obs["t"], self.last_damage, obs["zone"]):
             # No free placement points for 140m potshots; do not trigger
             # the entire cooperative practice squad unnecessarily.
@@ -433,7 +440,8 @@ class Bot:
         zone = obs["zone"]
         outward = abs(distance(target["pos"], zone["center"]) - zone["radius"]) < 13
         mortar_aim = None
-        if (mortar and is_mech and not urgent and "laser" not in target.get("weapons", ())
+        if (mortar and is_mech and not urgent and not ambush and
+                "laser" not in target.get("weapons", ())
                 and not self.recovering and (outward or not gun_clear and not retreat) and d < 145 and mortar["cooldown"] <= .35):
             mortar_aim = mortar_shot(self.arena, (*origin[:2], me["pos"][2] + me["stats"]["height"] + .5),
                                      target["pos"], target["vel"], mortar["stats"], zone, outward)
@@ -447,7 +455,10 @@ class Bot:
                 continue
             kind, stats = weapon["kind"], weapon["stats"]
             if kind == "gun":
-                act["fire"][i] = bool((offensive or return_fire) and gun_aligned)
+                # Do not broadcast a long-range ambush with 320m-audible gun
+                # shots before our quieter laser charge has finished.
+                act["fire"][i] = bool((offensive or return_fire) and
+                                      not ambush and gun_aligned)
             elif kind == "mortar" and mortar_aim:
                 act["fire"][i] = angle_delta(mortar_aim[0], me["aim"][0]) < .035 and abs(mortar_aim[1] - me["aim"][1]) < .023
             elif kind == "lightning":
