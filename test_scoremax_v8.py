@@ -27,6 +27,18 @@ class Tests(unittest.TestCase):
         n=dict(self.npc,pos=[70.,0.,0.])
         self.assertFalse(npc_pressure(self.me,[n],Arena(),20,-100))
         self.assertTrue(npc_pressure(self.me,[n],Arena(),20,19))
+    def test_recent_hit_does_not_expand_other_npcs_chase_radius(self):
+        other=dict(self.npc,id=106,pos=[73.,0.,0.])
+        self.assertFalse(npc_pressure(self.me,[other],Arena(),20,19,
+                                      chasing_npc_id=105))
+        self.assertTrue(npc_pressure(self.me,[other],Arena(),20,19,
+                                     chasing_npc_id=106))
+    def test_ten_point_placement_banked_changes_late_risk(self):
+        self.assertEqual(mode_v8("FARM",.89,self.danger,False,300,-100,-100,
+                                 True,alive=6),"TRAVEL")
+        self.assertEqual(mode_v8("FARM",.89,self.danger,False,100,-100,-100,
+                                 True,alive=6),"FARM")
+
     def test_heal_forbidden_when_npc_could_shoot(self):
         self.assertEqual(mode_v8("HEAL",.6,self.danger,False,12,0,0,
                                   False,npc_active=True),"EVADE")
