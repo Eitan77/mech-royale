@@ -124,6 +124,12 @@ class Arena:
             previous = z
         return True
 
+    def surface_walk(self, a, b, size):
+        """Test a level path for a grounded mech already standing above terrain."""
+        if a[2] > self.ground(*a[:2]) + 2:
+            return self.air_lane(a[:2], b, a[2] + .05, size)
+        return self.walk(a[:2], b, size)
+
     def snap(self, point, size, outgoing):
         cx, cy = (round(value / STEP) for value in point)
         local = [(cx + dx, cy + dy) for dx in range(-3, 4) for dy in range(-3, 4)]

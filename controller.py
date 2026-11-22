@@ -84,7 +84,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "V17 Roof and Flight"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -135,6 +135,9 @@ class Bot:
         self.foliage_until = -100.
         self.foliage_active = False
         self.ambush_target_id = None
+        self.perch = None
+        self.perch_checked_at = -100.
+        self.perch_rejected = {}
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -226,6 +229,46 @@ class Bot:
                 self.refuge = q
                 return q
         return None
+
+    def high_ground(self, me, zone, threats, size, now, deadline):
+        p = me["pos"]
+        center, radius = zone["next_center"], zone["next_radius"]
+        if self.perch is not None:
+            q = self.perch
+            if distance(q, center) < radius - 6 and distance(q, p) < 80 and (
+                p[2] < q[2] - 2 or now - self.last_damage > 2 or me["hp"] > .58 * me["max_hp"]
+            ):
+                return q
+            self.perch_rejected[q] = now + 12
+            self.perch = None
+        if now - self.perch_checked_at < .8 or me["energy"] < 61:
+            return None
+        self.perch_checked_at = now
+        candidates = [q for q in self.arena.rooftops if 7 < q[2] - p[2] <= 38 and
+                      distance(p, q) < 64 and distance(q, center) < radius - 15 and
+                      now >= self.perch_rejected.get(q, -100)]
+        candidates.sort(key=lambda q: distance(p, q) + .16 * distance(q, center) - .68 * (q[2] - p[2]))
+        best = None
+        for q in candidates[:5]:
+            if time.perf_counter() >= deadline:
+                break
+            if not self.arena.clear(*q, 2.5 * size, 9 * size):
+                continue
+            # Compare the same shooters at ground and roof height, using
+            # actual solid geometry to reject exposed roof approaches.
+            exposure = 0.
+            for enemy, weight in threats[:3]:
+                if distance(q, enemy["pos"]) > 245:
+                    continue
+                src = (*enemy["pos"][:2], enemy["pos"][2] + 7 * (1 + .05 * enemy.get("cubes", 0)))
+                if self.arena.shot(src, (*q[:2], q[2] + 3 * size)):
+                    exposure += weight
+            value = q[2] - p[2] - .5 * distance(p, q) - 18 * exposure
+            if best is None or value > best[0]:
+                best = value, q
+        if best is not None and (best[0] > -10 or not threats):
+            self.perch = best[1]
+        return self.perch
 
     def finish_capture(self, obs, enemies):
         me = obs["self"]
@@ -613,7 +656,7 @@ class Bot:
 
         horizontal_speed = math.hypot(*me["vel"][:2])
         high_roll = energy >= 170 and stats["jet_drain"] <= 9 and remain < 37
-        flight_window = 2 < remain < min(37 if high_roll else 17, energy / stats["jet_drain"] * 1.35)
+        flight_window = 2 < remain < min(37, energy / stats["jet_drain"] * 1.49)
         if not self.launching and flight_window and d < 2.0 and horizontal_speed <= 2 and me["hp"] > zone["dps"]:
             climb, reserve = project_ascent(remain, me["vel"][2], energy, stats, me["grounded"])
             attained = p[2] + climb
@@ -641,7 +684,12 @@ class Bot:
                 self.config["weapons"]["laser"]["range"] + 10
                 and "mortar" not in a.get("weapons", ()) for a, _ in threats
             )
-            self.launching = (protected > exposed or range_denial) and clear_ascent and reserve > 2
+            ascent_gain = attained - p[2]
+            no_collision = ascent_gain > 72 and not any(
+                "mortar" in enemy.get("weapons", ()) or enemy["pos"][2] > p[2] + 25
+                for enemy, _ in threats
+            )
+            self.launching = (protected > exposed or range_denial or no_collision) and clear_ascent and reserve > 2
         if self.launching and (remain <= 0 or energy < 0.8 or d > max(3.5, zone["radius"] * 0.75)):
             self.launching = False
             self.landing = anchor
@@ -669,6 +717,8 @@ class Bot:
             return goal
         span = min(d, 65)
         limit = (p[0] + (goal[0] - p[0]) * span / d, p[1] + (goal[1] - p[1]) * span / d)
+        if p[2] > self.arena.ground(*p[:2]) + 2 and self.arena.surface_walk(p, limit, size):
+            return goal
         if self.arena.walk(p[:2], limit, size) and (span == d or not self.path):
             self.detour = None
             self.path.clear()
@@ -1003,6 +1053,12 @@ class Bot:
                           "reactor": 60, "sensors": 49, "gyros": 48, "laser_damage": 62, "gun_rate": 59}
             choices = obs["offer"]["choices"]
             act["pick"] = upgrade_scoremax(choices, me, now, zone)
+            if hp > .65 and (now < 300 or final):
+                for desired in ("jets", "capacitor"):
+                    index = next((i for i, choice in enumerate(choices) if choice["id"] == desired), None)
+                    if index is not None and choices[act["pick"]]["id"] not in ("nanites", "plating"):
+                        act["pick"] = index
+                        break
         pickups = [item for item in obs["pickups"] if distance(p, item["pos"]) < self.config["loot"]["pickup_radius"] - 0.1
                    and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
         if kind == "mortar" and laser_threat and not pickups:
@@ -1019,16 +1075,39 @@ class Bot:
             self.foliage_active = False
         roof = self.arena.roof(*anchor) if final else -math.inf
         flight = False
+        climbing_perch = False
+        if (not capture and not urgent and not final and now > 34 and not own_laser_charging and
+                (self.perch is not None or (nearest > 40 and (threats or hp < .86 or me["cubes"] >= 3))) and
+                time.perf_counter() < started + .018):
+            perch = self.high_ground(me, zone, threats, size, now, started + .020)
+            if perch is not None:
+                perch_xy = perch[:2]
+                if p[2] >= perch[2] - .3 and distance(p, perch) < 10 and me["grounded"]:
+                    climbing_perch = True
+                    goal = perch_xy
+                    objective = None
+                    if hp < .94 and now - self.last_damage > 1.5:
+                        self.recovering = True
+                else:
+                    flight, approach = self.final_movement(act, me, [], p, perch_xy, perch_xy, perch[2],
+                                                           max(20, remain), zone, size, now, started + .026)
+                    climbing_perch = flight or self.roof_plan is not None
+                    if climbing_perch:
+                        goal = approach
+                        objective = None
+                    else:
+                        self.perch_rejected[perch] = now + 12
+                        self.perch = None
         if final:
             flight, goal = self.final_movement(act, me, threats, p, anchor, goal, roof, remain,
                                                zone, size, now, started + 0.019)
-        elif not capture and objective and objective[0] in ("cubes", "pickups") and not threats:
+        elif not climbing_perch and not capture and objective and objective[0] in ("cubes", "pickups") and not threats:
             elevated = objective[2]
             if elevated[2] - p[2] > 4 and elevated[2] - self.arena.ground(*elevated[:2]) > 4:
                 flight, goal = self.final_movement(act, me, [], p, tuple(elevated[:2]), goal,
                                                    self.arena.roof(*elevated[:2]), max(18, remain),
                                                    zone, size, now, started + .019)
-        if (not capture and not self.foliage_active and retreat and
+        if (not climbing_perch and not capture and not self.foliage_active and retreat and
                 not final and not urgent and hp<.68 and
                 time.perf_counter()<started+.017):
             refuge = self.recovery_roof(me, threats, zone, size, now, started + .019)
@@ -1047,7 +1126,7 @@ class Bot:
                         self.recovering = True
         elif not retreat or hp > .8:
             self.refuge = None
-        if not capture and not final and not flight and (self.crossing or
+        if not climbing_perch and not capture and not final and not flight and (self.crossing or
                                           (not laser_threat and distance(p, goal) > 12 and nearest > 36)):
             flight, goal = self.cross_obstacle(act, me, goal, zone, size, now, started + .022)
         target = None
@@ -1143,7 +1222,7 @@ class Bot:
             divisor = max(6 if flight and final else 3.3, length)
             act["move"] = [dx / divisor, dy / divisor]
         center_lock = (final and distance(goal, anchor) < .05 and distance(p, anchor) < 4
-                       and (not me["grounded"] or self.arena.walk(p[:2], anchor, size)))
+                       and (not me["grounded"] or self.arena.surface_walk(p, anchor, size)))
         if center_lock:
             act["move"] = self.center_control(me, anchor)
         if not center_lock and not flight and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:

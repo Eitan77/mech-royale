@@ -71,6 +71,7 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
             incoming.append((q, v, bullet["kind"] == "mortar"))
     best, best_score = (move, False), -math.inf
     ground_accel = stats["ground_accel"]
+    elevated = p[2] > arena.ground(*p[:2]) + 2
     current_margin = zone["radius"] - math.hypot(p[0] - zone["center"][0], p[1] - zone["center"][1])
     circles = forecast_circles(zone, now)
     for dx, dy in options:
@@ -93,7 +94,8 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
                 samples.append((x, y))
             if capture and any(math.dist(point, capture["pos"][:2]) > capture["radius"] - .2 for point in samples):
                 continue
-            if not arena.walk(p[:2], samples[-1], size):
+            if not (arena.air_lane(p[:2], samples[-1], p[2] + .05, size) if elevated
+                    else arena.walk(p[:2], samples[-1], size)):
                 continue
             margins = [radius - math.dist(point, center) for point, (center, radius) in zip(samples, circles)]
             # The previous condition guarded on 'now is None', although
@@ -122,11 +124,11 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
                     score += weight * .8 * (math.hypot(x - q[0], y - q[1]) - d)
             if charger_muzzle and time.perf_counter() < deadline:
                 sx, sy = samples[2]
-                z = arena.ground(sx, sy) + 5 * size
+                z = (p[2] if elevated else arena.ground(sx, sy)) + 5 * size
                 cover = not arena.shot(charger_muzzle, (sx, sy, z))
                 if cover:
                     tx, ty = samples[-1]
-                    tz = arena.ground(tx, ty) + 5 * size
+                    tz = (p[2] if elevated else arena.ground(tx, ty)) + 5 * size
                     if not arena.shot(charger_muzzle, (tx, ty, tz)):
                         score += 18 if exposed else 6
                 elif not exposed:

@@ -40,6 +40,18 @@ class Tests(unittest.TestCase):
             "stats":copy.deepcopy(self.hello["config"]["weapons"]["laser"])}
         obs["self"]["aim"]=[0.,0.]
 
+    def test_rooftop_route_checks_surface_height(self):
+        bot, _ = self.start()
+        for x, y, roof in bot.arena.rooftops:
+            end = (x + 3, y)
+            if roof - bot.arena.ground(x, y) < 8 or bot.arena.roof(*end) != roof:
+                continue
+            if bot.arena.air_lane((x, y), end, roof + .05, 1):
+                self.assertFalse(bot.arena.walk((x, y), end, 1))
+                self.assertTrue(bot.arena.surface_walk((x, y, roof), end, 1))
+                return
+        self.fail("No suitable rooftop path in the starter arena")
+
     def test_multi_tick_ambush_stays_silent_after_enemy_turns(self):
         bot,o=self.start()
         self.give_laser(o)
