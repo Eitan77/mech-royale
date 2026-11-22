@@ -66,6 +66,10 @@ def resource_laser_silence(me,target,near_mech,retreat,urgent,now):
     if retreat or urgent or now>260 or near_mech<120:return False
     laser=next((w for w in me["weapons"] if w and w["kind"]=="laser"),None)
     if not laser:return False
+    # A failed or blocked laser shot must not suppress the arm gun throughout
+    # the 1.65s cooldown. Silence applies only when charging or nearly ready.
+    if laser.get("cooldown",0)>.15 and not laser.get("charge",0):
+        return False
     power=laser["stats"]["damage"]*(1+.04*min(10,me["cubes"]))
     return power>=target.get("hp",300) and me["hp"]>.70*me["max_hp"]
 
