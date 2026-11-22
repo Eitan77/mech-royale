@@ -1,0 +1,59 @@
+"""V5 tactical state helpers. Pure functions, bounded work, no privileged info."""
+import math
+
+def xy_distance(a,b):
+    return math.hypot(a[0]-b[0],a[1]-b[1])
+
+def classify_danger(me,enemies,arena,max_checks=4):
+    """Track visible firing lanes, not all enemies inside memory radius."""
+    p=me["pos"]
+    chosen=sorted(enemies,key=lambda e:xy_distance(p,e["pos"]))[:max_checks]
+    exposed=near=lasers=charging=0
+    closest=math.inf
+    for e in chosen:
+        d=xy_distance(p,e["pos"])
+        closest=min(closest,d)
+        if d>230: continue
+        if d<85: near+=1
+        src=(e["pos"][0],e["pos"][1],e["pos"][2]+7*(1+.05*e.get("cubes",0)))
+        dest=(p[0],p[1],p[2]+.55*me["stats"]["height"])
+        if arena.shot(src,dest):
+            exposed+=1
+            if "laser" in e.get("weapons",()):
+                lasers+=1
+                if e.get("charging"): charging+=1
+    return dict(exposed=exposed,near=near,lasers=lasers,charging=charging,closest=closest)
+
+def next_mode(previous,hp,danger,zone_urgent,now,last_damage,last_hit,has_objective=False,has_cover=False):
+    """Priority policy: storm, incoming laser, escape, recover, farm, fight."""
+    if zone_urgent: return "ZONE"
+    if danger["charging"]: return "EVADE"
+    exposed=danger["exposed"]
+    if previous=="HEAL" and hp<.89 and exposed==0: return "HEAL"
+    if hp<.55 and (danger["lasers"] or exposed>=2): return "EVADE"
+    if hp<.76 and exposed==0 and has_cover: return "HEAL"
+    if previous=="EVADE" and hp<.62 and exposed>0: return "EVADE"
+    if has_objective and (exposed==0 or hp>.73 and danger["near"]<=1): return "FARM"
+    if exposed>0: return "FIGHT"
+    if hp<.68 and now-max(last_damage,last_hit)<5.4 and has_cover: return "HEAL"
+    return "TRAVEL"
+
+def candidate_resource_target(objective,obs):
+    if not objective: return None
+    group,ident,_=objective
+    if group not in ("crates","mechs"): return None
+    return next((a for a in obs[group] if a["id"]==ident),None)
+
+def energy_floor(me,storm_emergency=False):
+    return 7.0 if storm_emergency else min(38.0,max(24.0,.27*me.get("max_energy",100.0)))
+
+def zone_eta(lower_bound,direct_clear,route_points,speed,safety_factor=.75):
+    length=max(0.0,lower_bound)
+    if route_points and len(route_points)>1:
+        length=max(length,sum(xy_distance(a,b) for a,b in zip(route_points,route_points[1:])))
+    elif not direct_clear:
+        length=1.85*length+15
+    return length/max(1.0,speed*safety_factor)
+
+def should_commit_resource(now,locked_at,available,risk):
+    return available and not risk and now-locked_at<3.5
