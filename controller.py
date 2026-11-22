@@ -852,7 +852,11 @@ class Bot:
             act["pick"] = upgrade_v7(choices, me, now)
         pickups = [item for item in obs["pickups"] if distance(p, item["pos"]) < self.config["loot"]["pickup_radius"] - 0.1
                    and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
-        if kind == "mortar" and laser_threat and not pickups:
+        # Laser cook-off punishes a mortar carrier. Drop only when a
+        # *visible, charging, aimed* laser has a firing lane; previously we
+        # discarded the mortar for ANY laser in line of sight at 280m.
+        if (kind == "mortar" and not pickups and
+                danger["charged_exposed"]>0 and danger["aimed_exposed"]>0):
             act["drop"] = slot
         if pickups and not (second and second.get("charge")) and (
             not second or kind == "mortar" or nearest > 35 and now - self.last_damage > 3
