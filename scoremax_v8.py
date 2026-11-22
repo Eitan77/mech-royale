@@ -151,9 +151,12 @@ def laser_ambush(me,target,all_enemies,zone,now,alive):
     laser=next(w for w in me["weapons"] if w and w["kind"]=="laser")
     damage=laser["stats"]["damage"]*(1+.04*min(10,me["cubes"]))
     rear_damage=damage*1.5*(1.6 if "mortar" in target.get("weapons",()) else 1.)
-    # One shot early, two shots only after the initial squad hunt has eased.
-    max_shots=1 if now<140 else 2
-    if target["hp"]>rear_damage*max_shots*.98:
+    # Do not assume the second shot also hits the rear. The opponent can
+    # turn after the first hit and drop its mortar, removing both multipliers.
+    # Require near-certain kill damage using one rear hit plus one *frontal*
+    # unmodified laser when the late two-shot option is allowed.
+    budget=rear_damage if now<140 else rear_damage+damage
+    if target["hp"]>budget*.92:
         return False
     if zone["next_radius"]<75 and distance(me["pos"],zone["next_center"])>zone["next_radius"]-18:
         return False
