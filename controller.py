@@ -871,6 +871,20 @@ class Bot:
                 if distance(q, zone["center"]) < zone["radius"] - 18 and self.arena.walk(p[:2], q, size):
                     goal = q
                     break
+        # Persist the hiding contract after opponents disappear from our
+        # observations. They may still have perfect tracked positions for
+        # the five-second memory window; abandoning concealment immediately
+        # would make the entire maneuver pointless.
+        if (self.foliage_goal is not None and now<self.foliage_until and
+                not urgent and not final and zone["dps"]<100 and
+                me["in_zone"] and not attacking_npcs and nearest>=51 and
+                (hp<.96 or now-self.last_enemy_seen<5.6)):
+            self.foliage_active=True
+            goal=self.foliage_goal
+            objective=None
+            self.mode="HEAL"
+            retreat=True
+            self.recovering=True
         if self.foliage_active and (nearest<51 or attacking_npcs or
                                     urgent or final or zone["dps"]>=100):
             self.foliage_active=False
