@@ -35,6 +35,8 @@ def safe_candidate(obs,me,nearest,last_damage,thresholds,zone):
         return None
     if not any(w and w["kind"]=="gun" for w in me["weapons"]):
         return None
+    if any(w and w.get("charge",0)>0 for w in me["weapons"]):
+        return None
     qbest=None
     dbest=1e9
     for c in obs["cubes"]:
@@ -128,7 +130,11 @@ class UniversalSculptor:
             self.slot_started=now
 
         if self.stage=="DROP":
-            if now-self.started>8 or nearest<125:
+            if me["cubes"]>self.cube_count or obs.get("offer"):
+                # If a cube auto-collected early, don't make the mistake
+                # of stripping another weapon after the offer was drawn.
+                self.stage="REARM"
+            elif now-self.started>8 or nearest<125:
                 self.stage="REARM"
             else:
                 to_drop=next((kind for kind in self.drop_order
