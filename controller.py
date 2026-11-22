@@ -84,7 +84,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "V14 Supply Position"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -266,6 +266,43 @@ class Bot:
             if me["hp"] > danger + 125:
                 return drop
         return None
+
+    def approach_supply(self, obs, enemies, size, deadline):
+        """Use the 25-second fall window to reach a defensible drop first."""
+        me = obs["self"]
+        p, zone = me["pos"], obs["zone"]
+        if me["cubes"] >= 10 and me["hp"] > .86 * me["max_hp"]:
+            return None
+        if any(w and w.get("charge", 0) for w in me["weapons"]):
+            return None
+        choice = None
+        for drop in obs["drops"]:
+            q, radius = drop["pos"], drop["radius"]
+            d = distance(p, q)
+            if (drop["holder"] not in (None, me["id"]) or d > 245
+                    or distance(q, zone["next_center"]) + radius >= zone["next_radius"]):
+                continue
+            if time.perf_counter() >= deadline:
+                break
+            direct = self.arena.walk(p[:2], q[:2], size)
+            eta = max(0, (d if direct else 1.45 * d + 9) - radius) / me["stats"]["walk_speed"]
+            lands = drop["lands_in"]
+            # Stay available for nearby loot until it is time to head over.
+            if eta > lands + 7 or lands > eta + 7:
+                continue
+            complete_in = max(lands, eta) + drop["capture_s"]
+            for enemy in enemies:
+                threat_distance = distance(q, enemy["pos"])
+                if threat_distance < radius + 18:
+                    break
+                velocity = enemy["vel"]
+                projected = project_position(enemy["pos"], velocity, min(4, complete_in))
+                if distance(q, projected) < radius + 30:
+                    break
+            else:
+                if choice is None or complete_in < choice[0]:
+                    choice = complete_in, drop
+        return choice[1] if choice else None
 
     def objective(self, obs, enemies, weapon, p, zone, now, weapon_values):
         # Stay committed to a safe resource; recheck that it is still visible
@@ -1014,6 +1051,15 @@ class Bot:
             if second:
                 act["drop"] = slot
         capture = self.finish_capture(obs, enemies) if not urgent and not final else None
+        staging = None
+        if (not capture and not final and not urgent and not retreat and
+                not attacking_npcs and not charging_now and now - self.last_damage > 2 and
+                nearest > 55 and time.perf_counter() < started + .017):
+            staging = self.approach_supply(obs, enemies, size, started + .019)
+            if staging:
+                goal = tuple(staging["pos"][:2])
+                objective = None
+                self.foliage_active = False
         if capture:
             goal = tuple(capture["pos"][:2])
             self.foliage_active = False
@@ -1101,6 +1147,9 @@ class Bot:
         self.combat(act, obs, origin, target, retreat, urgent,
                     final and (hp < .86 or remain < 12) and
                     (not target or target.get("kind") != "npc"), priority_enemy)
+        if (capture or staging) and nearest > 55 and not own_laser_charging:
+            act["fire"] = [False, False]
+            self.laser_target = None
         if (self.foliage_active and nearest>100 and
                 not danger.get("charging") and not attacking_npcs):
             # No weapon report may betray our silent canopy retreat.

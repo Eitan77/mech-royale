@@ -40,6 +40,19 @@ class Tests(unittest.TestCase):
             "stats":copy.deepcopy(self.hello["config"]["weapons"]["laser"])}
         obs["self"]["aim"]=[0.,0.]
 
+    def test_supply_staging_accounts_for_enemy_motion(self):
+        bot, obs = self.start()
+        p = obs["self"]["pos"]
+        drop = {"pos": [p[0] + 135, p[1], p[2]], "radius": 8,
+                "lands_in": 14, "capture_s": 4, "progress": 0, "holder": None}
+        obs["drops"] = [drop]
+        obs["zone"].update(next_center=p[:2], next_radius=220)
+        bot.arena.walk = lambda *args: True
+        self.assertIs(bot.approach_supply(obs, [], 1, time.perf_counter() + 1), drop)
+        runner = self.target(obs, dist=220)
+        runner["vel"] = [-18, 0, 0]
+        self.assertIsNone(bot.approach_supply(obs, [runner], 1, time.perf_counter() + 1))
+
     def test_multi_tick_ambush_stays_silent_after_enemy_turns(self):
         bot,o=self.start()
         self.give_laser(o)
