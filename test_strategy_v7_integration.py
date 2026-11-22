@@ -79,6 +79,38 @@ class Integration(unittest.TestCase):
         self.assertEqual(bot.mode,"ZONE")
         self.assertGreater(math.hypot(*act["move"]),.5)
 
+    def test_low_hp_bot_goes_to_safe_full_heal_drop(self):
+        bot,obs=self.clone()
+        p=obs["self"]["pos"]
+        obs["t"]=75
+        obs["self"]["hp"]=500
+        obs["mechs"]=[]
+        obs["zone"]["next_center"]=p[:2]
+        obs["zone"]["next_radius"]=380
+        obs["drops"]=[{"id":990,"pos":[p[0]+20,p[1],p[2]],
+                        "holder":None,"lands_in":1,
+                        "radius":8,"capture_s":4,"progress":0}]
+        bot.arena.walk=lambda *args:True
+        act=bot.act(obs)
+        self.assertEqual(bot.mode,"FARM")
+        self.assertFalse(bot.recovering)
+        self.assertGreater(act["move"][0],.4)
+
+    def test_contested_full_heal_drop_is_ignored(self):
+        bot,obs=self.clone()
+        p=obs["self"]["pos"]
+        obs["t"]=75
+        obs["self"]["hp"]=500
+        obs["mechs"]=[self.enemy(obs,40)]
+        obs["zone"]["next_center"]=p[:2]
+        obs["zone"]["next_radius"]=380
+        obs["drops"]=[{"id":990,"pos":[p[0]+20,p[1],p[2]],
+                        "holder":None,"lands_in":1,
+                        "radius":8,"capture_s":4,"progress":0}]
+        bot.arena.shot=lambda *args:False
+        bot.act(obs)
+        self.assertNotEqual(bot.mode,"FARM")
+
     def test_unthreatening_mortar_holder_not_disarmed(self):
         bot,obs=self.clone()
         obs["self"]["weapons"][1]={
