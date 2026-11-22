@@ -1,7 +1,7 @@
-name: V6 THRONE experimental checks
+name: V7 GHOST + THRONE validation
 on:
   push:
-    branches: [v6-throne-experiment]
+    branches: [v7-ghost-throne]
   workflow_dispatch:
 jobs:
   validate:
@@ -13,11 +13,13 @@ jobs:
         with:
           python-version: "3.13"
       - name: Compile every module
-        run: python3 -m py_compile controller.py arena.py firing.py mechfight.py mobility.py pilot.py storm_tactics.py tactics_v5.py test_v5_policy.py throne_v6.py test_throne_v6.py test_throne_v6_integration.py
+        run: python3 -m py_compile controller.py arena.py firing.py mechfight.py mobility.py pilot.py storm_tactics.py tactics_v5.py test_v5_policy.py throne_v6.py test_throne_v6.py test_throne_v6_integration.py strategy_v7.py test_strategy_v7.py
       - name: Run V5 policy regression tests
         run: python3 -m unittest -v test_v5_policy
       - name: Run V6 moving-zone policy tests
         run: python3 -m unittest -v test_throne_v6
+      - name: V7 survival-policy adversarial tests
+        run: python3 -m unittest -v test_strategy_v7
       - name: Fetch official starter checker and map
         run: |
           curl --fail --location --retry 3 --output /tmp/mechfight-kit.tar.gz \
