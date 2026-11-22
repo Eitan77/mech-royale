@@ -429,6 +429,14 @@ class Bot:
         # for an actual disengagement or committed final-circle recovery.
         return_fire = (is_mech and (not final or urgent) and d < 225
                        and not retreat and not self.recovering)
+        # Scoremax: once ten opponents are already dead, don't start an
+        # unneeded fight that jeopardizes a banked top-six placement.
+        # A nearby assault or imminent charging laser still merits defense.
+        banked = obs["alive"]<=6
+        if banked and not final_guard and not (
+                d<70 or target.get("charging") and d<165):
+            offensive=False
+            return_fire=False
         gun_clear = clear if aim_point == lead else self.arena.shot(origin, lead)
         gun_aligned = bool(gun and gun.get("reload", 0) <= .1 and gun["cooldown"] <= .11
                            and (gun_clear or d < 35)
@@ -441,7 +449,7 @@ class Bot:
         mortar_aim = None
         if (mortar and is_mech and not urgent and not ambush and
                 "laser" not in target.get("weapons", ())
-                and not self.recovering and
+                and not self.recovering and (not banked or final_guard) and
                 ((mortar_finisher and not retreat) or
                  (d<100 and not gun_clear and not retreat) or
                  (d<75 and outward and me["hp"]>.85*me["max_hp"]))
