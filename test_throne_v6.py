@@ -19,8 +19,11 @@ class Tests(unittest.TestCase):
             c,r=zone_future(self.zone,390,25*i/50)
             self.assertLessEqual(abs(20-c[0]),r+1e-7)
     def test_storm_cost_exposure_vs_center(self):
-        safe=expected_zone_damage(self.zone,410,[20.,0.],5)
-        outside=expected_zone_damage(self.zone,410,[10.,0.],5)
+        # At t410 the real observation already reflects the moving circle,
+        # not the circle at t390. Use a self-consistent current snapshot.
+        late=dict(self.zone,center=[16.,0.],radius=5.)
+        safe=expected_zone_damage(late,410,[20.,0.],5)
+        outside=expected_zone_damage(late,410,[10.,0.],5)
         self.assertEqual(safe,0)
         self.assertGreater(outside,500)
     def test_contest_target_near_our_anchor(self):
