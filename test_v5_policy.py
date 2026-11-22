@@ -1,6 +1,6 @@
 """Fast policy regressions. Run: python3 -m unittest -v test_v5_policy."""
 import unittest
-from tactics_v5 import classify_danger,next_mode,candidate_resource_target,energy_floor,zone_eta,should_commit_resource
+from tactics_v5 import classify_danger,next_mode,candidate_resource_target,energy_floor,zone_eta,should_commit_resource,should_skirmish
 
 class DummyArena:
     def __init__(self,los=True): self.los=los
@@ -81,6 +81,12 @@ class Tests(unittest.TestCase):
     def test_far_enemy_allows_farm(self):
         d={"exposed":1,"near":0,"lasers":0,"charging":0,"closest":160}
         self.assertEqual(next_mode("TRAVEL",1,d,False,10,-100,-100,has_objective=True),"FARM")
+
+    def test_farm_movement_not_overwritten_by_skirmish(self):
+        enemy={"id":8}
+        self.assertFalse(should_skirmish("FARM",enemy,False,False,False,80))
+        self.assertTrue(should_skirmish("FIGHT",enemy,False,False,False,80))
+        self.assertFalse(should_skirmish("FIGHT",enemy,True,False,False,80))
 
     def test_resource_hysteresis(self):
         self.assertTrue(should_commit_resource(3,1,True,False))
