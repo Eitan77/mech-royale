@@ -197,3 +197,40 @@ def healing_supply_drop(me,drops,enemies,zone,now):
         if score>best_score:
             best,best_score=drop,score
     return best
+
+
+def nearest_legal_final_ground(arena,position,anchor,size,deadline):
+    """When final center is inside a solid, minimize storm distance on ground.
+
+    Called only after rooftop access has failed. The server uses XY for
+    storm but vertical prisms for movement; an impossible ground target can
+    leave a path planner stuck for the entire final phase.
+    """
+    import time
+    theta=math.atan2(position[1]-anchor[1],position[0]-anchor[0])
+    radius=2.5*size+.25
+    height=9*size
+    for ring in (0,4,7,11,16,22,30,42,55,70):
+        best=None
+        score=float("inf")
+        # Prioritize the near side for shorter route around a building.
+        offsets=(0,.5,-.5,1.,-1.,1.5,-1.5,2.,-2.,2.7,-2.7,math.pi)
+        for offset in offsets[:1] if ring==0 else offsets:
+            if time.perf_counter()>deadline:
+                return best
+            angle=theta+offset
+            q=(anchor[0]+ring*math.cos(angle),
+               anchor[1]+ring*math.sin(angle))
+            ground=arena.ground(*q)
+            if not arena.clear(q[0],q[1],ground,radius,height):
+                continue
+            travel=dist(position,q)
+            # Favor directly reachable points but don't reject feasible
+            # paths around intervening collidable buildings.
+            direct=(travel<75 and arena.walk(position[:2],q,size))
+            cost=ring+.12*travel+(0 if direct else 7)
+            if cost<score:
+                best,score=q,cost
+        if best is not None:
+            return best
+    return None
