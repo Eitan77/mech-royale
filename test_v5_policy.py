@@ -85,6 +85,7 @@ class Tests(unittest.TestCase):
     def test_farm_movement_not_overwritten_by_skirmish(self):
         enemy={"id":8}
         self.assertFalse(should_skirmish("FARM",enemy,False,False,False,80))
+        self.assertFalse(should_skirmish("TRAVEL",enemy,False,False,False,80))
         self.assertTrue(should_skirmish("FIGHT",enemy,False,False,False,80))
         self.assertFalse(should_skirmish("FIGHT",enemy,True,False,False,80))
 

@@ -82,6 +82,6 @@ def should_commit_resource(now,locked_at,available,risk):
 
 
 def should_skirmish(mode, visible, retreat, urgent, final, nearest):
-    """Do not overwrite a committed safe resource route with enemy orbiting."""
-    return bool(visible and mode != "FARM" and not retreat and not urgent
+    """Orbit opponents only when an exposed firing lane calls for a fight."""
+    return bool(visible and mode == "FIGHT" and not retreat and not urgent
                 and not final and 13 < nearest < 145)

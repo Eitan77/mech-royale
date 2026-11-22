@@ -180,4 +180,32 @@ class Tests(unittest.TestCase):
             act=bot.act(o)
         self.assertNotEqual(bot.ambush_target_id,7)
 
+    def test_skirmish_closes_only_to_short_an_isolated_laser(self):
+        for enemy_weapon, toward in (("laser", 1), ("mortar", -1)):
+            for side in (-1, 1):
+                with self.subTest(enemy_weapon=enemy_weapon, side=side):
+                    bot, obs = self.start()
+                    me = obs["self"]
+                    p = me["pos"]
+                    me.update(hp=me["max_hp"], energy=100., grounded=True, in_zone=True)
+                    me["weapons"][1] = {
+                        "kind": "lightning", "cooldown": 0.,
+                        "stats": self.hello["config"]["weapons"]["lightning"],
+                    }
+                    enemy = self.target(obs, 35)
+                    enemy["weapons"].append(enemy_weapon)
+                    obs.update(t=50, alive=12, mechs=[enemy],
+                               projectiles=[], drops=[])
+                    obs["zone"].update(center=p[:2], radius=320.,
+                                       next_center=p[:2], next_radius=240.,
+                                       shrink_end=110.)
+                    bot.evade_side, bot.evade_until = side, 55
+                    bot.arena.shot = lambda *args: True
+                    bot.arena.walk = lambda *args: True
+                    with patch.object(bot, "travel_waypoint", side_effect=lambda _, goal, *_args: goal), patch(
+                        "controller.choose_movement", side_effect=lambda _arena, _me, _zone, move, *_args: (move, False)
+                    ):
+                        act = bot.act(obs)
+                    self.assertGreater(toward * act["move"][0], .25)
+
 if __name__=="__main__":unittest.main()

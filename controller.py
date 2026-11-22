@@ -902,16 +902,26 @@ class Bot:
                 goal = (cx + math.cos(phase) * radius, cy + math.sin(phase) * radius)
         if (should_skirmish(self.mode, visible, retreat, urgent, final, nearest)
                 and not attacking_npcs):
-            # Fight while moving across the enemy's aim, with an outward bias
-            # against short-range weapons and an inward bias with our lightning.
+            # Close with lightning only when we can shut down an isolated
+            # laser. Otherwise hold arc range or regain space.
             enemy_pos = visible["pos"]
             away = bearing(enemy_pos, p)
             if now >= self.evade_until:
                 self.evade_side *= -1
                 self.evade_until = now + 0.85 + (me["id"] % 4) * 0.13
-            radial = 0.3 if nearest < 38 and kind != "lightning" else -0.32 if kind == "lightning" and nearest > 29 else 0
+            radial = -0.30 if nearest < 38 else 0.0
+            if kind == "lightning":
+                arc_range = second["stats"]["range"]
+                equipment = visible.get("weapons", ())
+                can_short = (danger["exposed"] == 1 and len(threats) == 1 and
+                             hp > .75 and me["energy"] > second["stats"]["energy"] + 20 and
+                             "laser" in equipment and "mortar" not in equipment)
+                if can_short and .67 * arc_range < nearest < arc_range + 14:
+                    radial = .46
+                elif "mortar" not in equipment and .60 * arc_range <= nearest < arc_range - 3:
+                    radial = 0.0
             for side in (self.evade_side, -self.evade_side):
-                angle = away + (math.pi / 2 - radial) * side
+                angle = away + (math.pi / 2 + radial) * side
                 q = p[0] + 14 * math.cos(angle), p[1] + 14 * math.sin(angle)
                 if distance(q, zone["center"]) < zone["radius"] - 18 and self.arena.walk(p[:2], q, size):
                     goal = q
