@@ -107,6 +107,30 @@ class Cases(unittest.TestCase):
                 final=True,primary_threat=None)
         self.assertTrue(act["fire"][0])
 
+    def test_final_center_contester_outprioritizes_far_weak_target(self):
+        bot,obs,_=self.prepare(hp=1400,enemy_distance=5)
+        p=obs["self"]["pos"]
+        obs["t"]=400
+        obs["zone"]["next_center"]=p[:2]
+        obs["zone"]["center"]=p[:2]
+        obs["zone"]["next_radius"]=0
+        obs["zone"]["radius"]=25
+        obs["zone"]["dps"]=260
+        obs["self"]["energy"]=30
+        close=obs["mechs"][0]
+        close["id"]=8
+        close["pos"]=[p[0]+5,p[1],p[2]]
+        close["weapons"]=["gun"]
+        close["charging"]=False
+        distant=dict(close,id=9,pos=[p[0]+80,p[1],p[2]],hp=35)
+        obs["mechs"]=[distant,close]
+        chosen=[]
+        bot.final_movement=lambda act,me,threats,p,anchor,goal,roof,remain,zone,size,now,deadline:(False,goal)
+        bot.combat=lambda act,obs,origin,target,*args:chosen.append(
+            target["id"] if target else None)
+        bot.act(obs)
+        self.assertEqual(chosen,[8])
+
     def test_silent_laser_ambush_doesnt_fire_arm_gun(self):
         bot,obs,_=self.prepare(hp=1350,enemy_distance=170)
         p=obs["self"]["pos"]
