@@ -875,7 +875,13 @@ class Bot:
             # the bot circles a crate while shooting a 1400-HP house bot.
             if target is None and self.mode == "FARM":
                 target = candidate_resource_target(objective, obs)
-            if target is None and enemies:
+            # Resource routes are not an excuse to aggro the cooperative
+            # house squad. When FARM is collecting loose cubes, a weapon or
+            # a supply drop, do not shoot a mech just because it is visible.
+            # An exposed attacker already forces a transition out of FARM.
+            scavenging = self.mode == "FARM" and objective is not None and (
+                objective[0] in ("cubes", "pickups", "drop"))
+            if target is None and enemies and not scavenging:
                 candidates = sorted(enemies, key=lambda a: distance(p, a["pos"]) * .28
                              + min(40, estimates[a["id"]][0]) * 2 + min(1200, estimates[a["id"]][1]) * .02
                              - (rear_laser_bonus(a, p, self.config["sound"]["range"]["laser_charge"],
@@ -886,7 +892,7 @@ class Bot:
                 )), candidates[0])
             if target is None and objective and objective[0] in ("mechs", "crates"):
                 target = candidate_resource_target(objective, obs)
-            if target is None and (not final or remain > 18):
+            if target is None and not scavenging and (not final or remain > 18):
                 nuisance = [a for a in obs["mechs"] if a["kind"] == "npc" and distance(a["pos"], p) < 43]
                 if nuisance:
                     target = min(nuisance, key=lambda a: distance(p, a["pos"]))
