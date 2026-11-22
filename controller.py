@@ -13,7 +13,8 @@ from tactics_v5 import (classify_danger, next_mode, candidate_resource_target,
                         should_skirmish)
 from throne_v6 import defensive_contest, permit_stationary_laser
 from strategy_v7 import (situational_danger, mode_v7, deliberate_mech_fire,
-                         should_silence, silence_movement, upgrade_v7)
+                         should_silence, silence_movement, upgrade_v7,
+                         healing_supply_drop)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -777,6 +778,16 @@ class Bot:
         # close-range lightning short to stop a charging laser. Only HEAL
         # requires absolute no-fire discipline to restart regeneration.
         self.recovering = self.mode == "HEAL"
+        # Full HP + 3 cubes + full energy can dominate passive healing,
+        # but only pursue an uncontested drop with a safe arrival window.
+        rescue_drop = None
+        if (self.mode == "HEAL" and not urgent and not final and
+                danger["exposed"] == 0):
+            rescue_drop = healing_supply_drop(me, obs["drops"], enemies, zone, now)
+            if rescue_drop is not None:
+                self.mode = "FARM"
+                retreat = False
+                self.recovering = False
         objective = None
         if retreat and threats and not urgent and (not final or distance(p, goal) < 6 and remain > 20):
             cover = self.cover_point(p, threats, zone, size, anchor, now, started + 0.009)
@@ -796,6 +807,9 @@ class Bot:
                 if allowed:
                     goal = min(allowed, key=lambda q: distance(q, anchor) * 0.85
                                - 0.95 * distance(q, visible["pos"]) - (6 if q == options[0] and laser_threat else 0))
+        elif rescue_drop is not None:
+            objective = ("drop", rescue_drop["id"], rescue_drop["pos"])
+            goal = tuple(rescue_drop["pos"][:2])
         elif (not urgent and not final and self.mode in ("TRAVEL", "FARM") and
               (danger["exposed"] == 0 or
                danger["exposed"] == 1 and danger["aimed_exposed"] == 0 and
