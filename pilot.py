@@ -3,9 +3,26 @@ import math
 import time
 
 
-def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, deadline, capture=None):
+def forecast_circles(zone, now):
+    """Build the six circle boundaries used by the movement rollout."""
+    center, radius = zone["center"], zone["radius"]
+    if now is None or "shrink_start" not in zone:
+        return [(center, radius)] * 6
+    starts, ends = zone["shrink_start"], zone["shrink_end"]
+    next_center, next_radius = zone["next_center"], zone["next_radius"]
+    remaining = ends - max(now, starts)
+    circles = []
+    for step in range(1, 7):
+        future = now + step * .1
+        fraction = min(1, max(0, (future - max(now, starts)) / remaining)) if remaining > 0 else 1
+        point = tuple(center[i] + (next_center[i] - center[i]) * fraction for i in (0, 1))
+        circles.append((point, radius + (next_radius - radius) * fraction))
+    return circles
+
+
+def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, deadline, capture=None, now=None):
     p, velocity, stats = me["pos"], me["vel"], me["stats"]
-    if not me["grounded"] or not threats and not projectiles:
+    if not me["grounded"] or not urgent and not threats and not projectiles:
         return move, False
     mag = math.hypot(*move)
     preferred = math.atan2(move[1], move[0]) if mag > 0.05 else me["aim"][0]
@@ -29,6 +46,7 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
     best, best_score = (move, False), -math.inf
     ground_accel = stats["ground_accel"]
     current_margin = zone["radius"] - math.hypot(p[0] - zone["center"][0], p[1] - zone["center"][1])
+    circles = forecast_circles(zone, now)
     for dx, dy in options:
         for boost in (False, True) if (urgent or incoming) and me["energy"] > 21 and mag > 0.1 else (False,):
             if time.perf_counter() >= deadline:
@@ -49,11 +67,15 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
                 continue
             if not arena.walk(p[:2], samples[-1], size):
                 continue
-            margin = zone["radius"] - math.hypot(x - zone["center"][0], y - zone["center"][1])
-            if margin < min(0, current_margin - .3):
+            margins = [radius - math.dist(point, center) for point, (center, radius) in zip(samples, circles)]
+            if margins[-1] < min(-.25, current_margin - .3) and now is None:
                 continue
             progress = (x - p[0]) * math.cos(preferred) + (y - p[1]) * math.sin(preferred)
             score = (2 if urgent else 1.0) * mag * progress - (1.1 if boost else 0)
+            outside = sum(margin < 0 for margin in margins)
+            score -= outside * zone.get("dps", 0) * .015
+            if urgent and margins[-1] < 0:
+                score += min(0, margins[-1] - current_margin) * 2
             for q, d, ax, ay, weight, charging, lightning in aim_lines:
                 r0x, r0y = p[0] - q[0], p[1] - q[1]
                 cross0 = abs(r0x * ay - r0y * ax)

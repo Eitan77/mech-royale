@@ -815,7 +815,7 @@ class Bot:
             act["move"] = [dx / divisor, dy / divisor]
         if not flight and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:
             direction, tactical_boost = choose_movement(
-                self.arena, me, zone, act["move"], threats, obs["projectiles"], size, urgent, started + 0.032, capture
+                self.arena, me, zone, act["move"], threats, obs["projectiles"], size, urgent, started + 0.032, capture, now
             )
             act["move"] = list(direction)
             act["boost"] = bool(tactical_boost or urgent and d > 4 and me["energy"] > 7)
