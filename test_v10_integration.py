@@ -87,6 +87,35 @@ class Tests(unittest.TestCase):
         self.assertTrue(act["fire"][1])
         self.assertFalse(act["fire"][0])
 
+    def test_three_cube_drone_laser_requires_exact_full_charge(self):
+        bot,o=self.start()
+        self.give_laser(o,charge=.70)
+        o["t"]=60
+        o["self"]["cubes"]=3
+        bot.laser_target=101
+        p=o["self"]["pos"]
+        drone={"kind":"npc","id":101,
+               "pos":[p[0]+50,p[1],p[2]],
+               "vel":[0.,0.,0.],"hp":350.,"max_hp":350.}
+        o["mechs"]=[drone]
+        bot.arena.shot=lambda *args:True
+        with patch("controller.shot_connects",return_value=True):
+            act={"tick":o["tick"],"move":[0,0],"fire":[False,False]}
+            bot.combat(act,o,(p[0],p[1],p[2]+o["self"]["stats"]["muzzle_height"]),
+                       drone,retreat=False,urgent=False,final=False,
+                       primary_threat=None)
+            self.assertTrue(act["fire"][1],
+                            "0.70s laser insufficient for 350HP drone at 3 cubes")
+            self.assertFalse(act["fire"][0],
+                             "Gun must not announce full-charge laser farming")
+            o["self"]["weapons"][1]["charge"]=.75
+            act2={"tick":o["tick"],"move":[0,0],"fire":[False,False]}
+            bot.combat(act2,o,(p[0],p[1],p[2]+o["self"]["stats"]["muzzle_height"]),
+                       drone,retreat=False,urgent=False,final=False,
+                       primary_threat=None)
+            self.assertFalse(act2["fire"][1],
+                             "At 0.75s the laser must release its full-damage beam")
+
     def test_incoming_bullet_interrupts_idle_healing(self):
         bot,o=self.start()
         o["self"]["hp"]=650
