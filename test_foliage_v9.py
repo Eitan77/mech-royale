@@ -28,6 +28,21 @@ class Tests(unittest.TestCase):
         a=(-489.+90.,143.25,8.)
         b=(-489.,143.25,8.)
         self.assertGreater(self.woods.screen_depth(a,b),1.5)
+    def test_ray_ending_at_crown_center_uses_half_chord(self):
+        from collections import defaultdict
+        from foliage_v9 import CELL
+        canopy=Foliage.__new__(Foliage)
+        canopy.density=.35
+        canopy.block_t=.25
+        # One 10m crown; put trunk far away to isolate crown geometry.
+        canopy.trees=[(0.,0.,3.,15.,10.,100.,100.,.2,0.)]
+        canopy.cells=defaultdict(list)
+        for cx in range(-3,3):
+            for cy in range(-2,3):
+                canopy.cells[(cx,cy)]=[0]
+        depth=canopy.screen_depth((-30.,0.,8.),(0.,0.,8.))
+        self.assertAlmostEqual(depth,3.5,places=4)
+
     def test_short_uncovered_line_has_no_canopy_depth(self):
         a=(0.,0.,200.)
         b=(5.,0.,200.)
