@@ -129,6 +129,7 @@ class Bot:
         self.final_ground_at = -100.0
         self.final_ground = None
         self.last_npc_damage = -100.0
+        self.last_npc_attacker = None
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -147,6 +148,7 @@ class Bot:
                 if (event.get("weapon") == "npc" or
                         event.get("by") is not None and event["by"] >= 100):
                     self.last_npc_damage = now
+                    self.last_npc_attacker = event.get("by")
                 if event.get("bearing") is not None:
                     self.damage_bearing = event["bearing"]
             elif kind == "hit":
@@ -711,7 +713,9 @@ class Bot:
         enemies.sort(key=lambda a: distance(p, a["pos"]) - (28 if "laser" in a.get("weapons", ()) else 0)
                      - (24 if a.get("charging") else 0))
         visible = enemies[0] if enemies else None
-        attacking_npcs = npc_pressure(me, obs["mechs"], self.arena, now, self.last_npc_damage)
+        attacking_npcs = npc_pressure(
+            me, obs["mechs"], self.arena, now,
+            self.last_npc_damage, self.last_npc_attacker)
         threats = [(a, 2.4 if a.get("charging") else 1.6 if "laser" in a.get("weapons", ()) else 1)
                    for a in enemies if distance(p, a["pos"]) < (
                        280 if "laser" in a.get("weapons", ()) else 235)]
@@ -835,7 +839,8 @@ class Bot:
         elif rescue_drop is not None:
             objective = ("drop", rescue_drop["id"], rescue_drop["pos"])
             goal = tuple(rescue_drop["pos"][:2])
-        elif (not urgent and not final and self.mode in ("TRAVEL", "FARM") and
+        elif (not urgent and not final and not (obs["alive"] <= 6 and now > 220)
+              and self.mode in ("TRAVEL", "FARM") and
               (danger["exposed"] == 0 or
                danger["exposed"] == 1 and danger["aimed_exposed"] == 0 and
                danger["charged_exposed"] == 0 and nearest > 110 and
