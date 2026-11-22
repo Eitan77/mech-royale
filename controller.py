@@ -219,7 +219,7 @@ class Bot:
                 enemy_eta = min((distance(e["pos"], q) / stats["boost_speed"] for e in enemies),
                                 default=math.inf)
                 capture_window = max(eta, drop["lands_in"]) + drop["capture_s"]
-                if enemy_eta + 1.5 < capture_window and drop["holder"] != obs["self"]["id"]:
+                if enemy_eta + 1.5 < capture_window and drop["holder"] != obs["self"]["id"] and drop["lands_in"] < 5:
                     continue
                 full_heal = (1 - hp) * 43
                 breakpoint = 8 if any(count < threshold <= count + 3
@@ -265,6 +265,31 @@ class Bot:
                     best, best_score = (group, ident, q), score
         self.loot_goal = best[1] if best else None
         return best
+
+    def resource_waypoint(self, p, target, group, size, stats, deadline):
+        """Choose a reachable firing perch with a path to collect the cubes."""
+        desired = 23 if group == "crates" else 33
+        body = (*target[:2], target[2] + (0.8 if group == "crates" else self.config["npc"]["height"] * .5))
+        if distance(p, target) <= desired and self.arena.shot((*p[:2], p[2] + stats["muzzle_height"]), body):
+            return p[:2]
+        facing = bearing(target, p)
+        best, best_cost = None, math.inf
+        for radius in (desired, desired * .6, desired * .35):
+            for offset in (0, .55, -.55, 1.05, -1.05, 1.60, -1.60):
+                if time.perf_counter() >= deadline:
+                    return best or target[:2]
+                q = (target[0] + radius * math.cos(facing + offset), target[1] + radius * math.sin(facing + offset))
+                z = self.arena.ground(*q)
+                if not self.arena.clear(*q, z, 2.5 * size + .25, 9 * size):
+                    continue
+                if not self.arena.shot((*q, z + stats["muzzle_height"]), body):
+                    continue
+                direct = self.arena.walk(p[:2], q, size)
+                collecting = self.arena.walk(q, target[:2], size)
+                cost = distance(p, q) * (1 if direct else 1.55) + radius * (0.7 if collecting else 1.4)
+                if cost < best_cost:
+                    best, best_cost = q, cost
+        return best or target[:2]
 
     def gun_solution(self, origin, actor, stats):
         p = actor["pos"]
@@ -627,12 +652,8 @@ class Bot:
             objective = self.objective(obs, enemies, kind, p, zone, now, weapon_values)
             if objective:
                 group, _, q = objective
-                d = distance(p, q)
-                if group in ("crates", "mechs") and d > 0:
-                    scale = min(d, 24 if group == "crates" else 32) / d
-                    goal = (q[0] + (p[0] - q[0]) * scale, q[1] + (p[1] - q[1]) * scale)
-                elif group in ("crates", "mechs"):
-                    goal = p[:2]
+                if group in ("crates", "mechs"):
+                    goal = self.resource_waypoint(p, q, group, size, stats, started + .016)
                 else:
                     goal = q[:2]
             elif nearest > 95 and now < 325 and distance(goal, p) < 8:
