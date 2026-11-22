@@ -16,7 +16,7 @@ from strategy_v7 import (situational_danger, mode_v7, deliberate_mech_fire,
                          should_silence, silence_movement, upgrade_v7,
                          healing_supply_drop, nearest_legal_final_ground)
 from scoremax_v8 import (npc_pressure, mode_v8, immediate_npc_escape,
-                         opportunistic_kill, laser_ambush)
+                         opportunistic_kill, laser_ambush, upgrade_scoremax)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -912,7 +912,7 @@ class Bot:
                           "lightning_range": 70, "gun_damage": 65, "laser_charge": 66, "capacitor": 65,
                           "reactor": 60, "sensors": 49, "gyros": 48, "laser_damage": 62, "gun_rate": 59}
             choices = obs["offer"]["choices"]
-            act["pick"] = upgrade_v7(choices, me, now)
+            act["pick"] = upgrade_scoremax(choices, me, now, zone)
         pickups = [item for item in obs["pickups"] if distance(p, item["pos"]) < self.config["loot"]["pickup_radius"] - 0.1
                    and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
         # Laser cook-off punishes a mortar carrier. Drop only when a
