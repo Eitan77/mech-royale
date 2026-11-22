@@ -878,13 +878,17 @@ class Bot:
         if (self.foliage_goal is not None and now<self.foliage_until and
                 not urgent and not final and zone["dps"]<100 and
                 me["in_zone"] and not attacking_npcs and nearest>=51 and
-                (hp<.96 or now-self.last_enemy_seen<5.6)):
+                (hp<.96 or now-self.last_enemy_seen<5.6) and
+                not danger.get("charging") and
+                (now-self.last_damage>1.2 or
+                 distance(p,self.foliage_goal)>4.)):
             self.foliage_active=True
             goal=self.foliage_goal
             objective=None
-            self.mode="HEAL"
-            retreat=True
-            self.recovering=True
+            if distance(p,self.foliage_goal)<4:
+                self.mode="HEAL"
+                retreat=True
+                self.recovering=True
         if self.foliage_active and (nearest<51 or attacking_npcs or
                                     urgent or final or zone["dps"]>=100):
             self.foliage_active=False
