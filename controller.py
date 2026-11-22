@@ -13,6 +13,7 @@ from tactics_v5 import (classify_danger, next_mode, candidate_resource_target,
                         should_skirmish)
 from scoremax_v8 import (npc_pressure, immediate_npc_escape,
                          upgrade_scoremax)
+from foliage_v9 import Foliage, should_ghost, stealth_vector
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -79,11 +80,12 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "clover-v4-integrated"
+    name = "V9-Foliage-Throne"
 
     def __init__(self, hello):
         self.config = hello["config"]
         self.arena = Arena(hello["map"]["dir"])
+        self.foliage = Foliage(hello["map"]["dir"])
         self.memory = {name: {} for name in ("crates", "cubes", "pickups", "mechs")}
         self.last_damage = -100
         self.last_hit = -100
@@ -123,6 +125,11 @@ class Bot:
         self.last_enemy_seen = -100.0
         self.last_npc_damage = -100.0
         self.last_npc_attacker = None
+        self.foliage_goal = None
+        self.foliage_score = 0.
+        self.foliage_scan_at = -100.
+        self.foliage_until = -100.
+        self.foliage_active = False
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -771,24 +778,46 @@ class Bot:
         # requires absolute no-fire discipline to restart regeneration.
         self.recovering = self.mode == "HEAL"
         objective = None
+        self.foliage_active = False
         if retreat and threats and not urgent and (not final or distance(p, goal) < 6 and remain > 20):
             cover = self.cover_point(p, threats, zone, size, anchor, now, started + 0.009)
             if cover is not None and (not final or distance(cover, anchor) < 7):
                 goal = cover
             elif visible and not final:
-                away = bearing(visible["pos"], p)
-                options = [(p[0] + 14 * math.cos(away + off), p[1] + 14 * math.sin(away + off))
-                           for off in (0.85, -0.85, 1.45, -1.45, 0)]
-                if now >= self.evade_until:
-                    self.evade_side *= -1
-                    self.evade_until = now + 0.75 + (me["id"] % 4) * 0.12
-                side = bearing(visible["pos"], p) + self.evade_side * 1.30
-                options.insert(0, (p[0] + 17 * math.cos(side), p[1] + 17 * math.sin(side)))
-                allowed = [q for q in options if distance(q, zone["center"]) < zone["radius"] - 7
-                           and self.arena.walk(p[:2], q, size)]
-                if allowed:
-                    goal = min(allowed, key=lambda q: distance(q, anchor) * 0.85
-                               - 0.95 * distance(q, visible["pos"]) - (6 if q == options[0] and laser_threat else 0))
+                # A dense canopy can hide the entire nine-meter mech from
+                # distant FOV vision, even when a normal hard cover path
+                # is unavailable. Proximity sensors ignore the canopy.
+                if (not attacking_npcs and nearest>54 and now<325 and
+                        zone["next_radius"]>70 and me["grounded"]):
+                    if (now-self.foliage_scan_at>1.5 and
+                            time.perf_counter()<started+.012):
+                        self.foliage_scan_at=now
+                        found=self.foliage.refuge(
+                            me,enemies,zone,self.arena,started+.022)
+                        if found is not None:
+                            self.foliage_score,self.foliage_goal,_=found
+                            self.foliage_until=now+8.
+                    if (self.foliage_goal is not None and
+                            now<self.foliage_until and
+                            distance(p,self.foliage_goal)<35 and
+                            distance(self.foliage_goal,zone["next_center"])
+                            <zone["next_radius"]-15):
+                        goal=self.foliage_goal
+                        self.foliage_active=True
+                if not self.foliage_active:
+                    away = bearing(visible["pos"], p)
+                    options = [(p[0] + 14 * math.cos(away + off), p[1] + 14 * math.sin(away + off))
+                               for off in (0.85, -0.85, 1.45, -1.45, 0)]
+                    if now >= self.evade_until:
+                        self.evade_side *= -1
+                        self.evade_until = now + 0.75 + (me["id"] % 4) * 0.12
+                    side = bearing(visible["pos"], p) + self.evade_side * 1.30
+                    options.insert(0, (p[0] + 17 * math.cos(side), p[1] + 17 * math.sin(side)))
+                    allowed = [q for q in options if distance(q, zone["center"]) < zone["radius"] - 7
+                               and self.arena.walk(p[:2], q, size)]
+                    if allowed:
+                        goal = min(allowed, key=lambda q: distance(q, anchor) * 0.85
+                                   - 0.95 * distance(q, visible["pos"]) - (6 if q == options[0] and laser_threat else 0))
         elif (not urgent and not final and not (obs["alive"]<=6 and now>220)
               and self.mode in ("TRAVEL","FARM") and
               (danger["exposed"] == 0 or
@@ -823,6 +852,10 @@ class Bot:
                 if distance(q, zone["center"]) < zone["radius"] - 18 and self.arena.walk(p[:2], q, size):
                     goal = q
                     break
+        if self.foliage_active and (nearest<51 or attacking_npcs or
+                                    urgent or final or zone["dps"]>=100):
+            self.foliage_active=False
+            self.foliage_until=now
         if retreat and attacking_npcs and not urgent and not final:
             escape = immediate_npc_escape(me, attacking_npcs[0],
                                           zone, self.arena, size)
@@ -836,7 +869,9 @@ class Bot:
                           and self.arena.walk(p[:2], cube["pos"][:2], size)]
             if safe_cubes:
                 goal = min(safe_cubes, key=lambda q: distance(q, p))[:2]
-        if retreat and visible and not attacking_npcs and not urgent and not final and objective is None and time.perf_counter() < started + .014:
+        if (retreat and visible and not attacking_npcs and
+                not self.foliage_active and not urgent and not final and
+                objective is None and time.perf_counter()<started+.014):
             screened = storm_screen(self.arena, p, visible, zone, size, started + .016)
             if screened is not None:
                 goal = screened
@@ -871,7 +906,9 @@ class Bot:
                 flight, goal = self.final_movement(act, me, [], p, tuple(elevated[:2]), goal,
                                                    self.arena.roof(*elevated[:2]), max(18, remain),
                                                    zone, size, now, started + .019)
-        if not capture and retreat and not final and not urgent and hp < .68 and time.perf_counter() < started + .017:
+        if (not capture and not self.foliage_active and retreat and
+                not final and not urgent and hp<.68 and
+                time.perf_counter()<started+.017):
             refuge = self.recovery_roof(me, threats, zone, size, now, started + .019)
             if refuge is not None:
                 q = tuple(refuge[:2])
@@ -987,8 +1024,19 @@ class Bot:
         reserve = energy_floor(me)
         if self.ground_boost.active(now, me["energy"], stats, reserve, safe_travel):
             act["boost"] = True
-        # Do not slow to 38% speed merely two seconds after taking damage.
-        # The practice squad can still share exact tracking during this period.
+        # Canopy approach: move quickly into optical cover, then stay silent
+        # for the five-second shared tracking window. Do not fire/reload/
+        # jet/boost while actually hiding, or sound reveals our position.
+        if (self.foliage_active and self.foliage_goal is not None and
+                distance(p,self.foliage_goal)<3.5 and
+                nearest>51 and not attacking_npcs and
+                not urgent and me["in_zone"]):
+            act["move"]=stealth_vector(me,self.foliage_goal)
+            act["boost"]=False
+            act["jump"]=False
+            act["fire"]=[False,False]
+            act["reload"]=False
+            self.recovering=True
         if not capture and me["grounded"] and d > 10 and not flight:
             if self.last_progress is None or distance(p, self.last_progress[1]) > 3:
                 self.last_progress = (now, p)
