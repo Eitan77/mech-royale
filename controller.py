@@ -982,7 +982,8 @@ class Bot:
             if target is None and objective and objective[0] in ("mechs", "crates"):
                 target = candidate_resource_target(objective, obs)
             if target is None and not scavenging and (not final or remain > 18):
-                nuisance = [a for a in obs["mechs"] if a["kind"] == "npc" and distance(a["pos"], p) < 43]
+                nuisance = [a for a in obs["mechs"] if a["kind"] == "npc" and
+                            distance(a["pos"], p) < (65 if attacking_npcs else 43)]
                 if nuisance:
                     target = min(nuisance, key=lambda a: distance(p, a["pos"]))
         priority_enemy = None if (target is not None and target.get("kind") in ("npc", "crate")
