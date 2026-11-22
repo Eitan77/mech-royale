@@ -95,10 +95,15 @@ class ShadowAtlas:
                 d=dist(p,q)
                 if d<4 or d>reach:continue
                 if dist(q,zone["center"])>zone["radius"]-10:continue
-                if dist(q,zone["next_center"])>zone["next_radius"]-16:
-                    continue
+                # The circle does not finish closing for tens of seconds.
+                # Cover 20m outside its NEXT radius is often the only way
+                # to stop being shot NOW. Reject it only if there won't be
+                # enough time to exit cover and reach the next circle later.
+                future_excess=max(0.,dist(q,zone["next_center"])-
+                                  max(0.,zone["next_radius"]-16))
+                transit=future_excess/max(1.,me["stats"]["walk_speed"]*.60)
                 eta=d/max(1.,me["stats"]["walk_speed"]*.70)
-                if zone["shrink_end"]-now < eta+9:continue
+                if zone["shrink_end"]-now<eta+transit*1.55+13:continue
                 g=arena.ground(*q)
                 if not arena.clear(q[0],q[1],g,2.5*size+.2,9*size):
                     continue
@@ -122,8 +127,8 @@ class ShadowAtlas:
                 if min(dist(q,e["pos"]) for e in shooters)<48:continue
                 score=(70*blocked-1.4*d+
                        .15*min(dist(q,e["pos"]) for e in shooters)-
-                       .16*dist(q,zone["next_center"])-
-                       (24 if not direct else 0))
+                       .08*dist(q,zone["next_center"])-
+                       .16*future_excess-(24 if not direct else 0))
                 if blocked==len(shooters):score+=50
                 if score>best_score:
                     best,best_score=q,score
@@ -131,8 +136,13 @@ class ShadowAtlas:
 
 def hold_shadow(me,goal,enemies,zone,arena,deadline):
     if goal is None or dist(me["pos"],goal)>90:return False
-    if dist(goal,zone["next_center"])>zone["next_radius"]-12:
+    future_excess=max(0.,dist(goal,zone["next_center"])-
+                      max(0.,zone["next_radius"]-12))
+    transit=future_excess/max(1.,me["stats"]["walk_speed"]*.60)
+    if zone["shrink_end"]-me.get("t",0)<0:
         return False
+    # The controller checks urgency independently. Don't reject cover
+    # outside the next circle when there is ample time to leave it.
     if not enemies:return True # preserve hiding through shared 5s tracking
     if time.perf_counter()>deadline:return True
     p=me["pos"];size=1+.05*me["cubes"]
