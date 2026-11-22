@@ -33,7 +33,7 @@ def next_mode(previous,hp,danger,zone_urgent,now,last_damage,last_hit,has_object
     if hp<.55 and (danger["lasers"] or exposed>=2): return "EVADE"
     if hp<.76 and exposed==0 and has_cover: return "HEAL"
     if previous=="EVADE" and hp<.62 and exposed>0: return "EVADE"
-    if has_objective and (exposed==0 or hp>.73 and danger["near"]<=1): return "FARM"
+    if has_objective and (exposed==0 or hp>.73 and danger["closest"]>105): return "FARM"
     if exposed>0: return "FIGHT"
     if hp<.68 and now-max(last_damage,last_hit)<5.4 and has_cover: return "HEAL"
     return "TRAVEL"
