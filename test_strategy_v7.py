@@ -73,6 +73,19 @@ class Cases(unittest.TestCase):
               "lands_in":12,"capture_s":4,"holder":None}
         self.assertIsNone(healing_supply_drop(me,[drop],[],self.zone,70))
 
+    def test_impossible_center_uses_nearest_legal_perimeter(self):
+        import time
+        class SolidCenter:
+            def ground(self,x,y):return 0.0
+            def clear(self,x,y,z,r,h):return math.hypot(x,y)>18+r
+            def walk(self,a,b,size):return True
+        candidate=nearest_legal_final_ground(
+            SolidCenter(),(40.,0.,0.),(0.,0.),1.,time.perf_counter()+.1)
+        self.assertIsNotNone(candidate)
+        self.assertGreater(math.hypot(*candidate),20)
+        self.assertLess(math.hypot(*candidate),42)
+        self.assertGreater(candidate[0],0)
+
     def test_laser_one_shot_priority(self):
         self.me["weapons"][1]={"kind":"laser"}
         opts=[{"id":"gun_mag"},{"id":"laser_damage"},{"id":"sensors"}]
