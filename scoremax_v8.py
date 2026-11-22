@@ -119,3 +119,42 @@ def expected_placement_proxy(alive,likelihoods):
     Probabilities should come from scored rollouts, NOT guessed constants.
     """
     return 16-alive+sum(max(0.,min(1.,p)) for p in likelihoods)
+
+
+def laser_ambush(me,target,all_enemies,zone,now,alive):
+    """A rare isolated, unsuspecting laser opportunity.
+
+    No points for damage; only attempt if rear damage could *finish* a
+    compromised enemy promptly, without drawing the whole practice squad.
+    Trees can obscure vision, but their effect is not assumed here.
+    """
+    if target is None or target.get("kind")!="mech" or alive<=6:
+        return False
+    if now>320 or zone["dps"]>=100 or me["hp"]/max(1.,me["max_hp"])<.86:
+        return False
+    if not any(w and w["kind"]=="laser" for w in me["weapons"]):
+        return False
+    d=distance(me["pos"],target["pos"])
+    if not 146<d<196:return False
+    if target.get("charging"):return False
+    # Rear half is angle >90deg from target torso. Require >120deg.
+    from_enemy=math.atan2(me["pos"][1]-target["pos"][1],
+                          me["pos"][0]-target["pos"][0])
+    if abs(math.remainder(from_enemy-target["aim"][0],math.tau))<2.1:
+        return False
+    # A second enemy seeing our charge defeats the stealth advantage.
+    if any(e["id"]!=target["id"] and
+           (distance(me["pos"],e["pos"])<185 or
+            distance(target["pos"],e["pos"])<90)
+           for e in all_enemies):
+        return False
+    laser=next(w for w in me["weapons"] if w and w["kind"]=="laser")
+    damage=laser["stats"]["damage"]*(1+.04*min(10,me["cubes"]))
+    rear_damage=damage*1.5*(1.6 if "mortar" in target.get("weapons",()) else 1.)
+    # One shot early, two shots only after the initial squad hunt has eased.
+    max_shots=1 if now<140 else 2
+    if target["hp"]>rear_damage*max_shots*.98:
+        return False
+    if zone["next_radius"]<75 and distance(me["pos"],zone["next_center"])>zone["next_radius"]-18:
+        return False
+    return True
