@@ -73,7 +73,15 @@ def choose_movement(arena, me, zone, move, threats, projectiles, size, urgent, d
             if not arena.walk(p[:2], samples[-1], size):
                 continue
             margins = [radius - math.dist(point, center) for point, (center, radius) in zip(samples, circles)]
-            if margins[-1] < min(-.25, current_margin - .3) and now is None:
+            # The previous condition guarded on 'now is None', although
+            # production always provides now. Penalize routes that cross from
+            # safety into storm or move farther outward once outside.
+            if now is not None:
+                if current_margin >= 0 and min(margins) < -1.2:
+                    continue
+                if current_margin < 0 and margins[-1] < current_margin - .2:
+                    continue
+            elif margins[-1] < min(-.25, current_margin - .3):
                 continue
             progress = (x - p[0]) * math.cos(preferred) + (y - p[1]) * math.sin(preferred)
             score = (2 if urgent else 1.0) * mag * progress - (1.1 if boost else 0)
