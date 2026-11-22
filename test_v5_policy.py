@@ -33,6 +33,30 @@ class Tests(unittest.TestCase):
         self.assertEqual(next_mode("FARM",1,d,False,10,-100,-100,
                                    has_objective=True),"FIGHT")
 
+    def test_priority_never_hides_adjacent_gunner(self):
+        # Four ranged lasers must not make a 10m gunner "disappear"
+        # from the mode's near/closest checks.
+        lasers=[dict(self.laser,id=40+n,pos=[205+n*8,0,0],charging=False)
+                for n in range(5)]
+        gunner=dict(self.laser,id=99,pos=[10,0,0],
+                    weapons=["gun"],charging=False)
+        d=classify_danger(self.me,lasers+[gunner],DummyArena(True))
+        self.assertEqual(d["near"],1)
+        self.assertEqual(d["closest"],10)
+        self.assertEqual(next_mode("FARM",1,d,False,10,-100,-100,
+                                   has_objective=True),"FIGHT")
+
+    def test_charge_threat_can_share_nearest_slot(self):
+        # Retain a 10m gunner AND the 250m charging laser in the
+        # four-geometry-query budget.
+        gunner=dict(self.laser,id=99,pos=[10,0,0],
+                    weapons=["gun"],charging=False)
+        d=classify_danger(self.me,[gunner]+[
+            dict(self.laser,id=40+n,pos=[200+n*10,0,0])
+            for n in range(5)],DummyArena(True))
+        self.assertEqual(d["closest"],10)
+        self.assertGreaterEqual(d["charging"],1)
+
     def test_gun_outside_range_not_exposed(self):
         enemy=dict(self.laser,pos=[270,0,0],weapons=["gun"],charging=False)
         d=classify_danger(self.me,[enemy],DummyArena(True))
