@@ -1,0 +1,36 @@
+name: V5 protocol and performance check
+on:
+  push:
+    branches: [v5-audited-survival]
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Compile every module
+        run: python3 -m py_compile controller.py arena.py firing.py mechfight.py mobility.py pilot.py storm_tactics.py tactics_v5.py test_v5_policy.py
+      - name: Run V5 policy regression tests
+        run: python3 -m unittest -v test_v5_policy
+      - name: Fetch official starter checker and map
+        run: |
+          curl --fail --location --retry 3 --output /tmp/mechfight-kit.tar.gz \
+            https://www.joinbuilders.org/buildathon/tracks/builders/files/mechfight-kit.tar.gz
+          mkdir -p /tmp/mech-kit
+          tar -xzf /tmp/mechfight-kit.tar.gz -C /tmp/mech-kit
+      - name: Verify protocol and 50ms response budget
+        run: |
+          python3 /tmp/mech-kit/mechfight-kit/check/check.py \
+            --map-dir /tmp/mech-kit/mechfight-kit/arena -- python3 -u controller.py
+      - name: Build Docker image
+        run: docker build --tag mech-v5-check .
+      - name: Match sandbox conformance check
+        run: |
+          python3 /tmp/mech-kit/mechfight-kit/check/check.py --map-dir /arena -- \
+            docker run --rm -i --network none --cpus 1 --memory 512m \
+              --read-only --tmpfs /tmp:rw,size=64m --user 65534:65534 \
+              -v /tmp/mech-kit/mechfight-kit/arena:/arena:ro mech-v5-check
