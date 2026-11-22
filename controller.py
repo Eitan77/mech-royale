@@ -84,7 +84,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "V19 Cube Snowball"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -330,11 +330,13 @@ class Bot:
                     continue
                 if group == "pickups" and weapon_values[item["kind"]] <= weapon_values.get(weapon, 0):
                     continue
-                if group in ("crates", "mechs") and (nearest < 62 or hp < 0.65 or count >= 10):
+                if group in ("crates", "mechs") and (nearest < 62 or hp < 0.65 or count >= 18):
                     continue
                 if group in ("cubes", "pickups") and any(distance(e["pos"], q) < min(24, d * 0.7) for e in enemies):
                     continue
-                value = {"cubes": 32 if count < 10 else 5, "pickups": 38, "crates": 17, "mechs": 22}[group]
+                value = {"cubes": 35 if count < 10 else 22, "pickups": 37, "crates": 22, "mechs": 18}[group]
+                if group == "pickups" and item["kind"] == "laser" and now < 245:
+                    value += 28
                 if weapon == "laser" and group in ("crates", "mechs"):
                     laser = next(w for w in obs["self"]["weapons"] if w and w["kind"] == "laser")
                     damage = laser["stats"]["damage"] * (1 + 0.04 * min(10, count))
@@ -343,8 +345,8 @@ class Bot:
                         # zero cubes, and 350-HP drones after 3 cubes.
                         # The real payoff is the cubes and upgrades, not the
                         # nominal damage. Prefer accessible free resources.
-                        if d < 90 and nearest > 115 and now < 245 and count < 10:
-                            value += 26 if group == "mechs" else 20
+                        if d < 110 and nearest > 100 and now < 245:
+                            value += 36 if group == "mechs" else 25
                         else:
                             value += 12
                 if group == "cubes" and count + 1 in self.config["cubes"]["upgrade_thresholds"]:
@@ -788,7 +790,7 @@ class Bot:
         second = me["weapons"][slot]
         kind = second["kind"] if second else None
         own_laser_charging = bool(kind=="laser" and second.get("charge",0)>0)
-        weapon_values = dict(WEAPONS, laser=4 if nearest > 85 else 2,
+        weapon_values = dict(WEAPONS, laser=6 if now < 245 or nearest > 85 else 2,
                              lightning=3, mortar=int(nearest > 50 and not any(
                                  "laser" in e.get("weapons", ()) for e in enemies)))
         final = zone["next_radius"] <= 0
@@ -843,6 +845,9 @@ class Bot:
             "exposed":len(threats), "near":len(threats),
             "lasers":0, "charging":int(charging_now), "closest":nearest}
         laser_threat = danger["lasers"] > 0
+        farm_window = (now < 245 and me["cubes"] < 15 and hp > .73 and not charging_now
+                       and not attacking_npcs and now - self.last_damage > 4 and nearest > 110
+                       and (danger["exposed"] == 0 or nearest > 165 and not laser_threat))
         estimates = {enemy["id"]: duel(me, enemy, self.config["weapons"], len(threats)) for enemy in enemies}
         new_mode = next_mode(self.mode, hp, danger, urgent, now,
                              self.last_damage, self.last_hit,
@@ -910,16 +915,21 @@ class Bot:
                         goal = min(allowed, key=lambda q: distance(q, anchor) * 0.85
                                    - 0.95 * distance(q, visible["pos"]) - (6 if q == options[0] and laser_threat else 0))
         elif (not urgent and not final and not (obs["alive"]<=6 and now>220)
-              and self.mode in ("TRAVEL","FARM") and
-              (danger["exposed"] == 0 or
-               danger["exposed"] == 1 and nearest > 130 and not laser_threat and hp > .8) and
-              time.perf_counter() < started + 0.013):
+              and (farm_window or self.mode in ("TRAVEL", "FARM") and (
+                  danger["exposed"] == 0 or
+                  danger["exposed"] == 1 and nearest > 130 and not laser_threat and hp > .8))
+              and time.perf_counter() < started + 0.013):
             objective = self.objective(obs, enemies, kind, p, zone, now, weapon_values)
             if objective:
                 self.mode = "FARM"
                 group, _, q = objective
                 if group in ("crates", "mechs"):
-                    goal = self.resource_waypoint(p, q, group, size, stats, started + .016)
+                    actor = candidate_resource_target(objective, obs)
+                    fast_collect = (kind == "laser" and actor is not None and
+                                    second["stats"]["damage"] * (1 + .04 * min(10, me["cubes"])) >= actor["hp"] and
+                                    self.arena.shot(origin, self.target_body(actor)) and
+                                    self.arena.walk(p[:2], q[:2], size))
+                    goal = q[:2] if fast_collect else self.resource_waypoint(p, q, group, size, stats, started + .016)
                 else:
                     goal = q[:2]
             elif nearest > 95 and now < 325 and distance(goal, p) < 8:
@@ -1003,6 +1013,10 @@ class Bot:
                           "reactor": 60, "sensors": 49, "gyros": 48, "laser_damage": 62, "gun_rate": 59}
             choices = obs["offer"]["choices"]
             act["pick"] = upgrade_scoremax(choices, me, now, zone)
+            if kind == "laser" and now < 125 and me["cubes"] < 6:
+                focus = next((i for i, choice in enumerate(choices) if choice["id"] == "laser_damage"), None)
+                if focus is not None and second["stats"]["damage"] < self.config["npc"]["hp"]:
+                    act["pick"] = focus
         pickups = [item for item in obs["pickups"] if distance(p, item["pos"]) < self.config["loot"]["pickup_radius"] - 0.1
                    and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
         if kind == "mortar" and laser_threat and not pickups:
