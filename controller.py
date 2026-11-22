@@ -16,7 +16,8 @@ from strategy_v7 import (situational_danger, mode_v7, deliberate_mech_fire,
                          should_silence, silence_movement, upgrade_v7,
                          healing_supply_drop, nearest_legal_final_ground)
 from scoremax_v8 import (npc_pressure, mode_v8, immediate_npc_escape,
-                         opportunistic_kill, laser_ambush, upgrade_scoremax)
+                         opportunistic_kill, laser_ambush, upgrade_scoremax,
+                         storm_mortar_finisher)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -440,9 +441,17 @@ class Bot:
         zone = obs["zone"]
         outward = abs(distance(target["pos"], zone["center"]) - zone["radius"]) < 13
         mortar_aim = None
+        storm_finisher = (is_mech and storm_mortar_finisher(
+            me, target, [e for e in obs["mechs"] if e["kind"]=="mech"],
+            zone, obs["alive"]))
+        permit_mortar = (final_guard or storm_finisher or
+                         deliberate_mech_fire(me, target, self.mode, obs["t"],
+                                              self.last_damage, zone))
         if (mortar and is_mech and not urgent and not ambush and
                 "laser" not in target.get("weapons", ())
-                and not self.recovering and (outward or not gun_clear and not retreat) and d < 145 and mortar["cooldown"] <= .35):
+                and not self.recovering and permit_mortar and
+                (outward or storm_finisher or not gun_clear and not retreat)
+                and d < 145 and mortar["cooldown"] <= .35):
             mortar_aim = mortar_shot(self.arena, (*origin[:2], me["pos"][2] + me["stats"]["height"] + .5),
                                      target["pos"], target["vel"], mortar["stats"], zone, outward)
             if mortar_aim and cfg["min_pitch"] <= mortar_aim[1] <= cfg["max_pitch"]:
