@@ -54,6 +54,25 @@ class Cases(unittest.TestCase):
         self.me["hp"]=400
         opts=[{"id":"gun_mag"},{"id":"plating"},{"id":"sensors"}]
         self.assertEqual(upgrade_v7(opts,self.me,50),1)
+    def test_full_heal_drop_can_interrupt_passive_regen(self):
+        me=dict(self.me,id=3,hp=560)
+        drop={"id":1500,"pos":[20.,0.,0.],
+              "lands_in":3,"capture_s":4,"holder":None}
+        self.assertIsNotNone(healing_supply_drop(me,[drop],[],self.zone,70))
+
+    def test_contested_drop_should_not_interrupt_regen(self):
+        me=dict(self.me,id=3,hp=560)
+        drop={"id":1500,"pos":[20.,0.,0.],
+              "lands_in":3,"capture_s":4,"holder":None}
+        enemy=dict(self.e,pos=[40.,0.,0.])
+        self.assertIsNone(healing_supply_drop(me,[drop],[enemy],self.zone,70))
+
+    def test_marginal_distant_drop_not_worth_detour(self):
+        me=dict(self.me,id=3,hp=1100)
+        drop={"id":1500,"pos":[75.,0.,0.],
+              "lands_in":12,"capture_s":4,"holder":None}
+        self.assertIsNone(healing_supply_drop(me,[drop],[],self.zone,70))
+
     def test_laser_one_shot_priority(self):
         self.me["weapons"][1]={"kind":"laser"}
         opts=[{"id":"gun_mag"},{"id":"laser_damage"},{"id":"sensors"}]
