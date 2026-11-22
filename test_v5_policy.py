@@ -28,6 +28,11 @@ class Tests(unittest.TestCase):
                           DummyArena(True))
         self.assertEqual(d["charging"],1)
 
+    def test_laser_lane_interrupts_existing_resource_lock(self):
+        d={"exposed":1,"near":0,"lasers":1,"charging":0,"closest":160}
+        self.assertEqual(next_mode("FARM",1,d,False,10,-100,-100,
+                                   has_objective=True),"FIGHT")
+
     def test_gun_outside_range_not_exposed(self):
         enemy=dict(self.laser,pos=[270,0,0],weapons=["gun"],charging=False)
         d=classify_danger(self.me,[enemy],DummyArena(True))
