@@ -662,6 +662,8 @@ class Bot:
         self.remember(obs, now)
         act = {"tick": obs["tick"], "move": [0, 0], "fire": [False, False]}
         enemies = [a for a in obs["mechs"] if a["kind"] == "mech"]
+        if enemies:
+            self.last_enemy_seen = now
         enemies.sort(key=lambda a: distance(p, a["pos"]) - (28 if "laser" in a.get("weapons", ()) else 0)
                      - (24 if a.get("charging") else 0))
         visible = enemies[0] if enemies else None
@@ -673,7 +675,6 @@ class Bot:
                 a, _ = min(old, key=lambda entry: distance(p, entry[0]["pos"]))
                 threats.append((a, 1.3))
         nearest = min((distance(p, a["pos"]) for a in enemies), default=999)
-        self.recovering = False
         slot = next((i for i, w in enumerate(me["weapons"]) if w and w["kind"] != "gun"), 1)
         second = me["weapons"][slot]
         kind = second["kind"] if second else None
@@ -686,10 +687,33 @@ class Bot:
         next_margin = zone["next_radius"] - distance(p, goal)
         remain = max(0, zone["shrink_end"] - now)
         walk_speed = stats["walk_speed"]
-        transit = max(0, -next_margin + 16) / max(1, walk_speed * 0.72)
+        # Forecast *routed* time into the NEXT circle, not just Euclidean
+        # distance. Cache expensive path checks to protect the 50-ms deadline.
+        needed = max(0.0, -next_margin + 16.0)
+        transit = needed / max(1.0, walk_speed * .72)
+        if not final and needed > 0:
+            if now - self.zone_eta_cache[1] < 1.2:
+                transit = self.zone_eta_cache[0]
+            else:
+                dcenter = max(.01, distance(p, zone["next_center"]))
+                radius = max(0.0, zone["next_radius"] - 16)
+                q = (zone["next_center"][0] + (p[0]-zone["next_center"][0])*radius/dcenter,
+                     zone["next_center"][1] + (p[1]-zone["next_center"][1])*radius/dcenter)
+                direct = False
+                path_points = None
+                if time.perf_counter() < started + .008:
+                    direct = self.arena.walk(p[:2], q, size)
+                    if not direct and time.perf_counter() < started + .009:
+                        partial = self.arena.route(p[:2], q, round(size, 2), started + .012)
+                        if partial and self.arena.walk(partial[-1], q, size):
+                            path_points = [p[:2]] + partial + [q]
+                transit = zone_eta(needed, direct, path_points, walk_speed)
+                if not direct:
+                    transit = max(transit, zone_eta(needed, False, None, walk_speed))
+                self.zone_eta_cache = (transit, now)
         pressure_margin = 4 if not threats else 9 + min(14, len(threats) * 3)
         urgent = not me["in_zone"] or (not final and (
-            margin < 13 or next_margin < 10 and transit + pressure_margin > remain
+            margin < 12 or (next_margin < 16 and transit + pressure_margin >= remain)
         ))
         if not final and not urgent:
             d = distance(p, goal)
@@ -698,13 +722,26 @@ class Bot:
                 offset = min(d, safe_radius) / d
                 goal = (goal[0] + (p[0] - goal[0]) * offset, goal[1] + (p[1] - goal[1]) * offset)
         anchor = goal
-        laser_threat = any("laser" in a.get("weapons", ()) for a, _ in threats)
+        # Only open enemy firing lanes count toward immediate danger.
+        # Visible-but-occluded house bots must not permanently disable farming.
+        charging_now = any(a.get("charging") for a in enemies)
+        if (self.danger_cache is None or now-self.danger_update > .25 or charging_now):
+            if time.perf_counter() < started + .014:
+                self.danger_cache = classify_danger(me, enemies, self.arena)
+                self.danger_update = now
+        danger = self.danger_cache or {
+            "exposed":len(threats), "near":len(threats),
+            "lasers":0, "charging":int(charging_now), "closest":nearest}
+        laser_threat = danger["lasers"] > 0
         estimates = {enemy["id"]: duel(me, enemy, self.config["weapons"], len(threats)) for enemy in enemies}
-        favorable = bool(visible and len(enemies) == 1 and estimates[visible["id"]][0] < 8
-                         and estimates[visible["id"]][1] < min(me["hp"] * 0.33, 420))
-        retreat = bool(threats and not favorable and (hp < 0.52 or len(enemies) >= 3 or laser_threat and (hp < 0.68 or len(enemies) >= 2)))
-        if hp < 0.7 and now - max(self.last_damage, self.last_hit) < stats.get("regen_delay", 5) + 3 and threats:
-            retreat = retreat or not favorable
+        new_mode = next_mode(self.mode, hp, danger, urgent, now,
+                             self.last_damage, self.last_hit,
+                             has_objective=self.resource_lock is not None,
+                             has_cover=danger["exposed"] == 0)
+        if new_mode != self.mode:
+            self.mode, self.mode_since = new_mode, now
+        retreat = self.mode in ("EVADE", "HEAL")
+        self.recovering = retreat
         objective = None
         if retreat and not urgent and (not final or distance(p, goal) < 6 and remain > 20):
             cover = self.cover_point(p, threats, zone, size, anchor, now, started + 0.009)
@@ -727,6 +764,7 @@ class Bot:
         elif not urgent and not final and time.perf_counter() < started + 0.013:
             objective = self.objective(obs, enemies, kind, p, zone, now, weapon_values)
             if objective:
+                self.mode = "FARM"
                 group, _, q = objective
                 if group in ("crates", "mechs"):
                     goal = self.resource_waypoint(p, q, group, size, stats, started + .016)
@@ -817,25 +855,34 @@ class Bot:
             flight, goal = self.cross_obstacle(act, me, goal, zone, size, now, started + .022)
         target = None
         if not flight:
-            if enemies:
-                candidates = sorted(enemies, key=lambda a: distance(p, a["pos"]) * 0.28
-                             + min(40, estimates[a["id"]][0]) * 2 + min(1200, estimates[a["id"]][1]) * 0.02
+            # A charging laser must retain its target while it slews/charges.
+            if second and second["kind"] == "laser" and second.get("charge", 0) and self.laser_target is not None:
+                target = next((a for a in (*obs["mechs"], *obs["crates"])
+                               if a["id"] == self.laser_target), None)
+            # The selected resource must be the thing we shoot, otherwise
+            # the bot circles a crate while shooting a 1400-HP house bot.
+            if target is None and self.mode == "FARM":
+                target = candidate_resource_target(objective, obs)
+            if target is None and enemies:
+                candidates = sorted(enemies, key=lambda a: distance(p, a["pos"]) * .28
+                             + min(40, estimates[a["id"]][0]) * 2 + min(1200, estimates[a["id"]][1]) * .02
                              - (rear_laser_bonus(a, p, self.config["sound"]["range"]["laser_charge"],
                                                  math.radians(self.config["vision"]["fov_deg"])) if kind == "laser" else 0)
                              - (55 if kind == "lightning" and a.get("charging") and distance(p, a["pos"]) < 44 else 0))
                 target = next((enemy for enemy in candidates[:3] if self.arena.shot(
                     origin, (*enemy["pos"][:2], enemy["pos"][2] + 4.5 * (1 + .05 * enemy.get("cubes", 0)))
                 )), candidates[0])
-            if objective and objective[0] in ("mechs", "crates") and (not target or nearest > 120 and not laser_threat):
-                group, ident, _ = objective
-                resource = next((a for a in obs[group] if a["id"] == ident), None)
-                if resource:
-                    target = resource
-            if not target and (not final or remain > 18):
+            if target is None and objective and objective[0] in ("mechs", "crates"):
+                target = candidate_resource_target(objective, obs)
+            if target is None and (not final or remain > 18):
                 nuisance = [a for a in obs["mechs"] if a["kind"] == "npc" and distance(a["pos"], p) < 43]
                 if nuisance:
                     target = min(nuisance, key=lambda a: distance(p, a["pos"]))
-        self.combat(act, obs, origin, target, retreat, urgent, final and (hp < 0.86 or remain < 12) and (not target or target.get("kind") != "npc"), visible)
+        priority_enemy = None if (target is not None and target.get("kind") in ("npc", "crate")
+                                  and self.mode == "FARM") else visible
+        self.combat(act, obs, origin, target, retreat, urgent,
+                    final and (hp < .86 or remain < 12) and
+                    (not target or target.get("kind") != "npc"), priority_enemy)
         if not target:
             if threats:
                 act["aim"] = [bearing(p, threats[0][0]["pos"]), 0]
