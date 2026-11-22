@@ -116,6 +116,32 @@ class IntegrationTests(unittest.TestCase):
         self.assertGreater(act["move"][1],0.3)
         self.assertLess(abs(act["move"][0]),.25)
 
+    def test_collecting_pickup_never_aggresses_occluded_enemy(self):
+        from unittest.mock import patch
+        obs=copy.deepcopy(self.observations[0])
+        p=obs["self"]["pos"]
+        obs["events"]=[]
+        obs["drops"]=[]
+        obs["mechs"]=[{
+            "id":7,"kind":"mech","pos":[p[0]+80,p[1],p[2]],
+            "vel":[0,0,0],"aim":[0,0],"hp":1400,"max_hp":1400,
+            "cubes":0,"weapons":["gun"],"charging":False
+        }]
+        pickup={"id":8010,"kind":"lightning","pos":[p[0],p[1]+25,p[2]]}
+        obs["pickups"]=[pickup]
+        bot=Bot(copy.deepcopy(self.hello))
+        bot.danger_cache={"exposed":0,"near":0,"lasers":0,
+                          "charging":0,"closest":80}
+        bot.danger_update=obs["t"]
+        bot.objective=lambda *args: ("pickups",pickup["id"],pickup["pos"])
+        bot.arena.walk=lambda *args: True
+        bot.arena.shot=lambda *args: True
+        with patch("controller.choose_movement",side_effect=lambda arena,me,zone,move,*a,**kw:(move,False)):
+            act=bot.act(obs)
+        self.assertEqual(bot.mode,"FARM")
+        self.assertGreater(act["move"][1],.3)
+        self.assertEqual(act["fire"],[False,False])
+
     def test_heal_does_not_fire_even_with_visible_enemy(self):
         obs=copy.deepcopy(self.observations[0])
         p=obs["self"]["pos"]
