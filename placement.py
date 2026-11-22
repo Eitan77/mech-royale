@@ -6,6 +6,8 @@ from arena import Arena
 from firing import firing_delay, project_position, shot_connects
 import mechfight
 from mobility import jet_pulse, project_ascent
+from pilot import choose_movement
+from tactical_v10 import imminent_projectile
 from throne_v6 import zone_future
 
 
@@ -24,7 +26,7 @@ def direction(a, b, braking_distance=2):
 
 
 class PlacementBot:
-    name = "Placement Controller"
+    name = "Placement Intercepts"
 
     def __init__(self, hello):
         self.cfg = hello["config"]
@@ -280,6 +282,7 @@ class PlacementBot:
         goal = anchor
         flight = False
         target = None
+        capture = None
         health = me["hp"] / me["max_hp"]
         urgent = (not me["in_zone"] or distance(p, zone["center"]) > zone["radius"] - 10
                   or distance(p, anchor) > zone["next_radius"] - 13
@@ -303,6 +306,8 @@ class PlacementBot:
                     goal = tuple(item["pos"][:2])
                     if group == "pickups" and gap < self.cfg["loot"]["pickup_radius"] - .1:
                         act["take"] = item["id"]
+                    elif group == "drops" and item["lands_in"] <= 0 and gap < item["radius"] - .4:
+                        capture = item
                     elif group == "crates":
                         target = item
                         if gap < 38 and self.arena.shot((*p[:2], p[2] + stats["muzzle_height"]),
@@ -326,6 +331,18 @@ class PlacementBot:
             act["boost"] = me["energy"] > reserve and (urgent or escaping)
         if target and time.perf_counter() < start + .032:
             self.fire(act, obs, target)
+        charging = any(weapon and weapon["kind"] == "laser" and act["fire"][i]
+                       for i, weapon in enumerate(me["weapons"]))
+        if (not flight and me["grounded"] and (not final or dest_gap > 6)
+                and time.perf_counter() < start + .032 and p[2] < self.arena.ground(*p[:2]) + 2):
+            chargers = [(enemy, weight / 100) for weight, enemy in threats if enemy.get("charging")]
+            if chargers or imminent_projectile(me, obs["projectiles"], zone):
+                speed_scale = self.cfg["mech"]["charge_move_mult"] if charging else 1.0
+                move, boost = choose_movement(
+                    self.arena, me, zone, act["move"], chargers, obs["projectiles"],
+                    size, urgent, start + .037, capture, now, speed_scale,
+                )
+                act["move"], act["boost"] = list(move), boost
         if target is None and now - self.damage_at > 1 and not threats:
             act["reload"] = any(w and w["kind"] == "gun" and w["ammo"] < 5 and w["reload"] == 0
                                 for w in me["weapons"])
