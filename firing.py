@@ -35,15 +35,23 @@ def cylinder_hit(point, direction, feet, velocity, radius, height, travel_limit)
     return lo if lo <= hi else None
 
 
+def project_position(point, velocity, delay):
+    return tuple(position + delay * speed for position, speed in zip(point, velocity))
+
+
+def firing_delay(weapon):
+    return min(.1, max(.05, weapon["cooldown"]))
+
+
 def shot_connects(arena, origin, me, requested, target, weapon, radius, height):
     stats = me["stats"]
-    lead_time = min(.1, max(.05, weapon["cooldown"]))
+    lead_time = firing_delay(weapon)
     yaw = slew(me["aim"][0], requested[0], stats["turn_rate"] * lead_time, True)
     pitch = slew(me["aim"][1], requested[1], stats["pitch_rate"] * lead_time)
     direction = math.cos(pitch) * math.cos(yaw), math.cos(pitch) * math.sin(yaw), math.sin(pitch)
     feet_velocity = target.get("vel", (0, 0, 0))
-    feet = tuple(target["pos"][i] + lead_time * feet_velocity[i] for i in range(3))
-    muzzle = tuple(origin[i] + lead_time * me["vel"][i] for i in range(3))
+    feet = project_position(target["pos"], feet_velocity, lead_time)
+    muzzle = project_position(origin, me["vel"], lead_time)
     setback = 0.5 + stats.get("radius", 2.5 * (1 + .05 * me["cubes"]))
     forward = tuple(muzzle[i] + direction[i] * setback for i in range(3))
     if arena.shot(muzzle, forward):

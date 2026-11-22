@@ -3,7 +3,7 @@ import math
 import time
 
 from arena import Arena
-from firing import shot_connects
+from firing import firing_delay, project_position, shot_connects
 from pilot import choose_movement
 from storm_tactics import mortar_shot, storm_screen
 import mechfight as mf
@@ -391,16 +391,12 @@ class Bot:
                     best, best_cost = q, cost
         return best or target[:2]
 
-    def gun_solution(self, origin, actor, stats):
+    def target_body(self, actor):
         p = actor["pos"]
         kind = actor.get("kind", "crate")
         size = 1 + 0.05 * actor.get("cubes", 0)
         height = {"mech": 4.5 * size, "npc": self.config["npc"]["height"] * 0.5, "crate": 0.8}[kind]
-        body = (p[0], p[1], p[2] + height)
-        velocity = actor.get("vel", (0, 0, 0))
-        shifted = tuple(body[i] + .05 * velocity[i] for i in range(3))
-        lead = intercept(origin, shifted, velocity, stats["speed"])
-        return body, lead
+        return p[0], p[1], p[2] + height
 
     def combat(self, act, obs, origin, target, retreat, urgent, final, primary_threat):
         me = obs["self"]
@@ -414,18 +410,27 @@ class Bot:
             self.ambush_target_id = None
             return
         d = distance(origin, target["pos"])
-        body, lead = self.gun_solution(origin, target, gun["stats"] if gun else self.config["weapons"]["gun"])
+        body = self.target_body(target)
+        velocity = target.get("vel", (0, 0, 0))
+        gun_delay = firing_delay(gun) if gun else .05
+        gun_origin = project_position(origin, me["vel"], gun_delay)
+        gun_speed = (gun["stats"] if gun else self.config["weapons"]["gun"])["speed"]
+        lead = intercept(gun_origin, project_position(body, velocity, gun_delay), velocity, gun_speed)
         laser = secondary and secondary["kind"] == "laser"
         lightning = secondary and secondary["kind"] == "lightning"
-        aim_point = body if laser and (charge or not (retreat or urgent or final) and secondary["cooldown"] <= 0.15) else lead
-        if lightning and d < secondary["stats"]["range"] - 1 and (not gun or target.get("charging")):
-            aim_point = body
-        yaw = bearing(origin, aim_point)
-        pitch = math.atan2(aim_point[2] - origin[2], distance(origin, aim_point))
+        aim_origin, aim_point = gun_origin, lead
+        if laser and (charge or not (retreat or urgent or final) and secondary["cooldown"] <= .15):
+            delay = firing_delay(secondary)
+            aim_origin = project_position(origin, me["vel"], delay)
+            aim_point = project_position(body, velocity, delay)
+        elif lightning and d < secondary["stats"]["range"] - 1 and (not gun or target.get("charging")):
+            aim_origin, aim_point = origin, body
+        yaw = bearing(aim_origin, aim_point)
+        pitch = math.atan2(aim_point[2] - aim_origin[2], distance(aim_origin, aim_point))
         act["aim"] = [yaw, max(cfg["min_pitch"], min(cfg["max_pitch"], pitch))]
         error = angle_delta(yaw, me["aim"][0])
         allowed_pitch = cfg["min_pitch"] <= pitch <= cfg["max_pitch"]
-        clear = allowed_pitch and self.arena.shot(origin, aim_point)
+        clear = allowed_pitch and self.arena.shot(aim_origin, aim_point)
         kind = target.get("kind", "crate")
         scale = 1 + self.config["cubes"]["size_per_cube"] * target.get("cubes", 0)
         radius, height = {
@@ -471,7 +476,7 @@ class Bot:
                 d<70 or target.get("charging") and d<165):
             offensive=False
             return_fire=False
-        gun_clear = clear if aim_point == lead else self.arena.shot(origin, lead)
+        gun_clear = clear if aim_point is lead else self.arena.shot(gun_origin, lead)
         gun_aligned = bool(gun and gun.get("reload", 0) <= .1 and gun["cooldown"] <= .11
                            and (gun_clear or d < 35)
                            and shot_connects(self.arena, origin, me, act["aim"], target, gun, radius, height))
@@ -557,7 +562,7 @@ class Bot:
         cone = math.radians(stats["cone_deg"]) * .5
         if angle_delta(yaw, desired) > cone or distance(origin, target["pos"]) > stats["range"]:
             return False
-        end = self.gun_solution(origin, target, self.config["weapons"]["gun"])[0]
+        end = self.target_body(target)
         if not self.arena.shot(origin, end):
             return False
         nearer = []
@@ -567,7 +572,7 @@ class Bot:
                 continue
             d = distance(origin, item["pos"])
             if d < distance_to_target and angle_delta(bearing(origin, item["pos"]), yaw) <= cone:
-                point = self.gun_solution(origin, item, self.config["weapons"]["gun"])[0]
+                point = self.target_body(item)
                 if self.arena.shot(origin, point):
                     nearer.append((d, point))
         if not nearer:

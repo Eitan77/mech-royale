@@ -225,4 +225,24 @@ class Tests(unittest.TestCase):
         enemy["pos"][0] = me["pos"][0] + 60
         self.assertIsNone(bot.finish_capture(obs, [enemy]))
 
+    def test_combat_aim_accounts_for_shooter_motion_before_firing(self):
+        for kind, delay in (("gun", .10), ("laser", .05)):
+            with self.subTest(kind=kind):
+                bot, obs = self.start()
+                me = obs["self"]
+                me["vel"] = [0., 15., 0.]
+                me["weapons"][0].update(ammo=12, reload=0., cooldown=.10)
+                me["weapons"][1] = None
+                if kind == "laser":
+                    self.give_laser(obs, charge=.75)
+                enemy = self.target(obs, 100, hp=900)
+                obs["mechs"] = [enemy]
+                bot.laser_target = enemy["id"]
+                bot.arena.shot = lambda *args: True
+                x, y, z = me["pos"]
+                origin = (x, y, z + me["stats"]["muzzle_height"])
+                action = {"fire": [False, False]}
+                bot.combat(action, obs, origin, enemy, False, False, False, enemy)
+                self.assertAlmostEqual(action["aim"][0], math.atan2(-15 * delay, 100))
+
 if __name__=="__main__":unittest.main()
