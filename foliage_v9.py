@@ -168,7 +168,11 @@ def should_ghost(now,last_enemy_seen,last_damage,zone,me):
     return now-last_enemy_seen>=.2 and now-last_enemy_seen<7.5 and me["hp"]<me["max_hp"]*.90
 
 def stealth_vector(me,goal):
-    """Command movement under 5m/s to avoid creating further step sounds."""
+    """Brake first, then command under 5m/s to avoid step sounds."""
+    velocity=me.get("vel",(0.,0.))
+    speed=math.hypot(velocity[0],velocity[1])
+    if speed>4.7:
+        return [-velocity[0]/speed*.45,-velocity[1]/speed*.45]
     d=xy(me["pos"],goal)
     if d<1.75:return [0.,0.]
     dx=(goal[0]-me["pos"][0])/d;dy=(goal[1]-me["pos"][1])/d
