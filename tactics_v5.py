@@ -16,16 +16,23 @@ def classify_danger(me,enemies,arena,max_checks=4):
         threatening=laser and d <= 280
         return (0 if threatening and e.get("charging") else
                 1 if threatening else 2, d)
-    chosen=sorted(enemies,key=priority)[:max_checks]
-    exposed=near=lasers=charging=0
-    closest=math.inf
+    # Cheap proximity counts MUST include *all* visible enemies; selecting
+    # the four most dangerous firing lanes must never hide a gunner standing
+    # directly beside us. Always reserve one geometry check for the nearest.
+    distances=[(xy_distance(p,e["pos"]),e) for e in enemies]
+    closest=min((d for d,_ in distances),default=math.inf)
+    near=sum(d<85 for d,_ in distances)
+    closest_enemy=min(distances,key=lambda pair:pair[0])[1] if distances else None
+    ordered=sorted(enemies,key=priority)
+    chosen=([closest_enemy] if closest_enemy is not None else [])
+    chosen.extend(e for e in ordered if e is not closest_enemy)
+    chosen=chosen[:max_checks]
+    exposed=lasers=charging=0
     for e in chosen:
         d=xy_distance(p,e["pos"])
-        closest=min(closest,d)
         # A laser reaches 280m; gun-only threats stop nearer.
         equipment=e.get("weapons",())
         if d > (280 if "laser" in equipment else 235): continue
-        if d<85: near+=1
         src=(e["pos"][0],e["pos"][1],e["pos"][2]+7*(1+.05*e.get("cubes",0)))
         dest=(p[0],p[1],p[2]+.55*me["stats"]["height"])
         if arena.shot(src,dest):
