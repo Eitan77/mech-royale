@@ -194,3 +194,27 @@ def upgrade_scoremax(choices,me,now,zone):
         "mortar_velocity":35,
     }
     return max(range(len(choices)),key=lambda i:scores.get(choices[i]["id"],40))
+
+
+def storm_mortar_finisher(me,target,all_enemies,zone,alive):
+    """Use mortar displacement as a late placement-point weapon, not DPS farming.
+
+    16m/s knockback plus upward knock and 45-energy drain can leave
+    a low-HP bot outside the 160-260HP/s storm. Only a high-confidence
+    *opportunity* gate; successful ballistic hit remains engine-dependent.
+    """
+    if target is None or target.get("kind")!="mech" or alive<=6:return False
+    if zone["dps"]<100 or "laser" in target.get("weapons",()):return False
+    if me["hp"]/max(1,me["max_hp"])<.8 or not me.get("in_zone",True):
+        return False
+    if me.get("energy",0)<60:return False
+    dist_target=distance(me["pos"],target["pos"])
+    if not 30<dist_target<140:return False
+    radius=zone["radius"]
+    edge=radius-distance(zone["center"],target["pos"])
+    ours=radius-distance(zone["center"],me["pos"])
+    if not -1.5<edge<9 or ours<14:return False
+    if target["hp"]>min(520.,me["hp"]*.45):return False
+    if any(e["id"]!=target["id"] and distance(me["pos"],e["pos"])<80
+           for e in all_enemies):return False
+    return True
