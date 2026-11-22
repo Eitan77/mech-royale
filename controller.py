@@ -3,6 +3,7 @@ import math
 import time
 
 from arena import Arena
+from pilot import choose_movement
 import mechfight as mf
 from mobility import GroundBoost, defensive_yaw, jet_pulse, project_ascent, rear_laser_bonus
 
@@ -71,12 +72,12 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "clover-v4"
+    name = "clover-v4-pilot"
 
     def __init__(self, hello):
         self.config = hello["config"]
         self.arena = Arena(hello["map"]["dir"])
-        self.memory = {name: {} for name in ("crates", "cubes", "pickups", "mechs", "projectiles")}
+        self.memory = {name: {} for name in ("crates", "cubes", "pickups", "mechs")}
         self.last_damage = -100
         self.last_hit = -100
         self.damage_bearing = None
@@ -100,7 +101,7 @@ class Bot:
         self.evade_until = 0
 
     def remember(self, obs, now):
-        for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4), ("projectiles", 0.25)):
+        for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
             memory = self.memory[group]
             visible = {item["id"] for item in obs[group]}
             position = obs["self"]["pos"]
@@ -246,11 +247,12 @@ class Bot:
         aligned = max(error, pitch_error) < hit_tolerance and allowed_pitch
         clear = allowed_pitch and self.arena.shot(origin, aim_point)
         finishing = target.get("kind") == "mech" and target.get("hp", 1400) < 145 and d < 60
-        offensive = not (retreat or urgent or final) or finishing
+        is_rear_duel = target.get("kind") == "mech" and angle_delta(target["aim"][0], bearing(target["pos"], origin)) > 2.0
+        offensive = not (urgent or final) and (not retreat or is_rear_duel) or finishing
         is_mech = target.get("kind") == "mech"
         # Running and firing the arm gun are independent. Only preserve silence
         # for an actual disengagement or committed final-circle recovery.
-        return_fire = is_mech and not final and (d < 150 or target.get("charging"))
+        return_fire = is_mech and (not final or urgent) and d < 225
         if gun and aim_point != lead:
             gun_yaw = bearing(origin, lead)
             gun_pitch = math.atan2(lead[2] - origin[2], distance(origin, lead))
@@ -284,44 +286,6 @@ class Bot:
                         self.laser_target = target["id"]
         if gun and gun.get("ammo", 0) <= 4 and (not gun_clear or not is_mech) and not any(act["fire"]):
             act["reload"] = True
-
-    def dodge(self, obs, p, direction, size, now, deadline):
-        dangers = []
-        for projectile, seen in self.memory["projectiles"].values():
-            if len(dangers) >= 8 or time.perf_counter() > deadline:
-                break
-            q, v = projectile["pos"], projectile["vel"]
-            age = now - seen
-            dx, dy = q[0] + age * v[0] - p[0], q[1] + age * v[1] - p[1]
-            speed2 = v[0] * v[0] + v[1] * v[1]
-            if speed2 < 1:
-                continue
-            eta = -(dx * v[0] + dy * v[1]) / speed2
-            if 0.08 < eta < 1.1 and math.hypot(dx + eta * v[0], dy + eta * v[1]) < 9:
-                z = q[2] + (age + eta) * v[2]
-                if projectile["kind"] == "mortar":
-                    z -= 0.5 * self.config["weapons"]["mortar"]["gravity"] * (age + eta)**2
-                if p[2] - 3 < z < p[2] + size * 9 + 2:
-                    dangers.append((dx, dy, v, eta, projectile["kind"] == "mortar"))
-        if not dangers:
-            return direction, False
-        speed = obs["self"]["stats"]["walk_speed"]
-        best, best_score = direction, -math.inf
-        for cx, cy in (tuple(direction), *ANGLES):
-            if time.perf_counter() > deadline:
-                break
-            endpoint = p[0] + cx * 5, p[1] + cy * 5
-            if distance(endpoint, obs["zone"]["center"]) > obs["zone"]["radius"] - 1 or not self.arena.walk(p[:2], endpoint, size):
-                continue
-            score = 3 * (cx * direction[0] + cy * direction[1])
-            for dx, dy, v, eta, mortar in dangers:
-                mx = eta * speed * cx
-                my = eta * speed * cy
-                miss = math.hypot(dx + eta * v[0] - mx, dy + eta * v[1] - my)
-                score += min(10, miss) - (10 if miss < (7 if mortar else 3 * size) else 0)
-            if score > best_score:
-                best, best_score = (cx, cy), score
-        return best, True
 
     def final_movement(self, act, me, threats, p, anchor, goal, roof, remain, zone, size, now, deadline):
         stats = me["stats"]
@@ -446,7 +410,7 @@ class Bot:
         estimates = {enemy["id"]: duel(me, enemy, self.config["weapons"], len(threats)) for enemy in enemies}
         favorable = bool(visible and len(enemies) == 1 and estimates[visible["id"]][0] < 8
                          and estimates[visible["id"]][1] < min(me["hp"] * 0.33, 420))
-        retreat = bool(threats and not favorable and (laser_threat or hp < 0.72 or len(enemies) >= 2 or nearest < 35))
+        retreat = bool(threats and not favorable and (hp < 0.52 or len(enemies) >= 3 or laser_threat and (hp < 0.68 or len(enemies) >= 2)))
         if hp < 0.7 and now - max(self.last_damage, self.last_hit) < stats.get("regen_delay", 5) + 3 and threats:
             retreat = retreat or not favorable
         objective = None
@@ -485,14 +449,21 @@ class Bot:
                 phase = int(now / 9) * 2.399963 + me["id"]
                 radius = min(75, zone["next_radius"] * 0.48)
                 goal = (cx + math.cos(phase) * radius, cy + math.sin(phase) * radius)
-        if favorable and not urgent and not final and visible and kind == "lightning":
+        if visible and not retreat and not urgent and not final and 13 < nearest < 145:
+            # Fight while moving across the enemy's aim, with an outward bias
+            # against short-range weapons and an inward bias with our lightning.
             enemy_pos = visible["pos"]
-            d = distance(p, enemy_pos)
-            if d > 27 and d < 55 and distance(enemy_pos, zone["center"]) < zone["radius"] - 20:
-                step = min(12, d - 24) / d
-                flank = p[0] + (enemy_pos[0] - p[0]) * step, p[1] + (enemy_pos[1] - p[1]) * step
-                if self.arena.walk(p[:2], flank, size):
-                    goal = flank
+            away = bearing(enemy_pos, p)
+            if now >= self.evade_until:
+                self.evade_side *= -1
+                self.evade_until = now + 0.85 + (me["id"] % 4) * 0.13
+            radial = 0.3 if nearest < 38 and kind != "lightning" else -0.32 if kind == "lightning" and nearest > 29 else 0
+            for side in (self.evade_side, -self.evade_side):
+                angle = away + (math.pi / 2 - radial) * side
+                q = p[0] + 14 * math.cos(angle), p[1] + 14 * math.sin(angle)
+                if distance(q, zone["center"]) < zone["radius"] - 18 and self.arena.walk(p[:2], q, size):
+                    goal = q
+                    break
         if obs["offer"]:
             priorities = {"nanites": 100 if now < 340 else 35, "plating": 92, "servos": 77, "armor": 75,
                           "gun_mag": 74 if now < 205 else 61, "jets": 67 if now < 360 else 82,
@@ -590,11 +561,12 @@ class Bot:
             length = math.hypot(dx, dy)
             divisor = max(6 if flight and final else 3.3, length)
             act["move"] = [dx / divisor, dy / divisor]
-        if not flight and not final and me["grounded"] and time.perf_counter() < started + 0.027:
-            direction, dodge = self.dodge(obs, p, act["move"], size, now, started + 0.031)
+        if not flight and me["grounded"] and (not final or urgent) and time.perf_counter() < started + 0.028:
+            direction, tactical_boost = choose_movement(
+                self.arena, me, zone, act["move"], threats, obs["projectiles"], size, urgent, started + 0.032
+            )
             act["move"] = list(direction)
-            act["boost"] = bool((dodge or urgent or retreat and d > 12 and nearest < 75) and
-                                d > 4 and me["energy"] > (5 if urgent else 25))
+            act["boost"] = bool(tactical_boost or urgent and d > 4 and me["energy"] > 7)
         elif not flight and urgent and me["grounded"] and d > 6 and me["energy"] > 6:
             act["boost"] = True
         charging = bool(second and second.get("charge"))
