@@ -9,7 +9,8 @@ from storm_tactics import mortar_shot, storm_screen
 import mechfight as mf
 from mobility import GroundBoost, defensive_yaw, jet_pulse, project_ascent, rear_laser_bonus
 from tactics_v5 import (classify_danger, next_mode, candidate_resource_target,
-                        energy_floor, zone_eta, should_commit_resource)
+                        energy_floor, zone_eta, should_commit_resource,
+                        should_skirmish)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -786,7 +787,7 @@ class Bot:
                 phase = int(now / 9) * 2.399963 + me["id"]
                 radius = min(75, zone["next_radius"] * 0.48)
                 goal = (cx + math.cos(phase) * radius, cy + math.sin(phase) * radius)
-        if visible and not retreat and not urgent and not final and 13 < nearest < 145:
+        if should_skirmish(self.mode, visible, retreat, urgent, final, nearest):
             # Fight while moving across the enemy's aim, with an outward bias
             # against short-range weapons and an inward bias with our lightning.
             enemy_pos = visible["pos"]
