@@ -765,8 +765,9 @@ class Bot:
                 if allowed:
                     goal = min(allowed, key=lambda q: distance(q, anchor) * 0.85
                                - 0.95 * distance(q, visible["pos"]) - (6 if q == options[0] and laser_threat else 0))
-        elif (not urgent and not final and
-              (danger["exposed"] == 0 or danger["exposed"] == 1 and nearest > 90) and
+        elif (not urgent and not final and self.mode in ("TRAVEL", "FARM") and
+              (danger["exposed"] == 0 or
+               danger["exposed"] == 1 and nearest > 130 and not laser_threat and hp > .8) and
               time.perf_counter() < started + 0.013):
             objective = self.objective(obs, enemies, kind, p, zone, now, weapon_values)
             if objective:
