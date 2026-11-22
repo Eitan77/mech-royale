@@ -4,6 +4,7 @@ import time
 
 from arena import Arena
 import mechfight as mf
+from mobility import GroundBoost, defensive_yaw, jet_pulse, project_ascent, rear_laser_bonus
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -70,7 +71,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "clover-v3"
+    name = "clover-v4"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -93,6 +94,8 @@ class Bot:
         self.roof_target = None
         self.roof_crossing = False
         self.roof_traversing = False
+        self.ground_boost = GroundBoost()
+        self.landing = None
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4), ("projectiles", 0.25)):
@@ -142,7 +145,7 @@ class Bot:
         self.cover = best
         return best
 
-    def objective(self, obs, enemies, weapon, p, zone, now):
+    def objective(self, obs, enemies, weapon, p, zone, now, weapon_values):
         best, best_score = None, 0
         hp = obs["self"]["hp"] / obs["self"]["max_hp"]
         stats = obs["self"]["stats"]
@@ -175,13 +178,20 @@ class Bot:
                     continue
                 if group == "mechs" and item["kind"] != "npc":
                     continue
-                if group == "pickups" and WEAPONS[item["kind"]] <= WEAPONS.get(weapon, 0):
+                if group == "pickups" and weapon_values[item["kind"]] <= weapon_values.get(weapon, 0):
                     continue
                 if group in ("crates", "mechs") and (nearest < 62 or hp < 0.65 or count >= 10):
                     continue
                 if group in ("cubes", "pickups") and any(distance(e["pos"], q) < min(24, d * 0.7) for e in enemies):
                     continue
-                value = {"cubes": 27 if count < 10 else 4, "pickups": 35, "crates": 13, "mechs": 22}[group]
+                value = {"cubes": 32 if count < 10 else 5, "pickups": 38, "crates": 17, "mechs": 22}[group]
+                if weapon == "laser" and group in ("crates", "mechs"):
+                    laser = next(w for w in obs["self"]["weapons"] if w and w["kind"] == "laser")
+                    damage = laser["stats"]["damage"] * (1 + 0.04 * min(10, count))
+                    if damage >= item.get("hp", 350):
+                        value += 12
+                if group == "cubes" and count + 1 in self.config["cubes"]["upgrade_thresholds"]:
+                    value += 9
                 score = value - 2.8 * travel(q, d) - 0.29 * (now - seen)
                 if group == "mechs":
                     exposed = max(0, 5 - (hp - 0.65) * 10)
@@ -216,8 +226,7 @@ class Bot:
         body, lead = self.gun_solution(origin, target, gun["stats"] if gun else self.config["weapons"]["gun"])
         laser = secondary and secondary["kind"] == "laser"
         lightning = secondary and secondary["kind"] == "lightning"
-        firing_now = charge >= (secondary["stats"]["charge"] - 0.05) if laser else False
-        aim_point = body if firing_now else lead
+        aim_point = body if laser and (charge or not retreat and secondary["cooldown"] <= 0.15) else lead
         if lightning and d < secondary["stats"]["range"] - 1 and not gun:
             aim_point = body
         yaw = bearing(origin, aim_point)
@@ -226,23 +235,34 @@ class Bot:
         error = angle_delta(yaw, me["aim"][0])
         pitch_error = abs(pitch - me["aim"][1])
         allowed_pitch = cfg["min_pitch"] <= pitch <= cfg["max_pitch"]
-        hit_tolerance = max(0.014, min(0.36, 1.65 / max(1, d)))
+        hit_tolerance = max(0.019, min(0.38, 2.3 / max(1, d)))
         if target.get("kind") == "mech":
             hit_tolerance *= 1 + 0.05 * target.get("cubes", 0)
         aligned = max(error, pitch_error) < hit_tolerance and allowed_pitch
         clear = allowed_pitch and self.arena.shot(origin, aim_point)
         finishing = target.get("kind") == "mech" and target.get("hp", 1400) < 145 and d < 60
         offensive = not (retreat or urgent or final) or finishing
+        is_mech = target.get("kind") == "mech"
+        # Running and firing the arm gun are independent. Only preserve silence
+        # for an actual disengagement or committed final-circle recovery.
+        return_fire = is_mech and not final and (d < 150 or target.get("charging"))
+        if gun and aim_point != lead:
+            gun_yaw = bearing(origin, lead)
+            gun_pitch = math.atan2(lead[2] - origin[2], distance(origin, lead))
+            gun_aligned = max(angle_delta(gun_yaw, me["aim"][0]), abs(gun_pitch - me["aim"][1])) < hit_tolerance
+            gun_clear = gun_aligned and self.arena.shot(origin, lead)
+        else:
+            gun_aligned, gun_clear = aligned, clear
         for i, weapon in enumerate(me["weapons"]):
             if not weapon:
                 continue
             kind, stats = weapon["kind"], weapon["stats"]
             if kind == "gun":
-                act["fire"][i] = bool(offensive and aligned and clear and d < min(stats["range"] - 3, 205))
+                act["fire"][i] = bool((offensive or return_fire) and gun_aligned and gun_clear and d < stats["range"] - 3)
             elif kind == "lightning":
                 short = target.get("charging", False) and "laser" in target.get("weapons", ())
                 reserve = 18 if retreat else 12
-                act["fire"][i] = bool((offensive or short) and error < math.radians(stats["cone_deg"]) * 0.38
+                act["fire"][i] = bool((offensive or return_fire or short) and error < math.radians(stats["cone_deg"]) * 0.38
                                       and d < stats["range"] - 0.5 and self.arena.shot(origin, body)
                                       and me["energy"] > stats["energy"] + (3 if short else reserve))
             elif kind == "laser":
@@ -253,11 +273,11 @@ class Bot:
                     ))
                 else:
                     act["fire"][i] = bool(offensive and not urgent and clear and allowed_pitch and error < 0.10
-                                          and 12 < d < stats["range"] - 10 and weapon["cooldown"] <= 0.1
+                                          and 2 < d < stats["range"] - 3 and weapon["cooldown"] <= 0.1
                                           and (target.get("kind") == "mech" or not primary_threat))
                     if act["fire"][i]:
                         self.laser_target = target["id"]
-        if gun and gun.get("ammo", 0) <= 5 and (not clear or retreat):
+        if gun and gun.get("ammo", 0) <= 4 and (not gun_clear or not is_mech) and not any(act["fire"]):
             act["reload"] = True
 
     def dodge(self, obs, p, direction, size, now, deadline):
@@ -317,22 +337,23 @@ class Bot:
             self.roof_plan = self.arena.roof_route(p, anchor, size, stats, energy, deadline)
         if self.roof_plan:
             _, launch, altitude, _ = self.roof_plan
-            if not self.roof_crossing and distance(p, launch) > 1.9:
-                return False, launch
+            if not self.roof_crossing and (distance(p, launch) > 1.9 or math.hypot(*me["vel"][:2]) > 2):
+                return False, launch if distance(p, launch) > 1.9 else p[:2]
             self.roof_crossing = True
             if energy < 1 or (d < 1.2 and p[2] >= roof - 0.25):
                 self.roof_plan = None
                 self.roof_crossing = self.roof_traversing = False
                 return False, anchor
             act["jump"] = bool(me["grounded"])
-            act["boost"] = not me["grounded"]
+            act["boost"] = not me["grounded"] and jet_pulse(me["vel"][2], energy, stats)
             self.roof_traversing |= p[2] >= altitude - 0.4
             return True, anchor if self.roof_traversing else launch
 
-        fuel_time = energy / stats["jet_drain"]
-        flight_window = 1 < remain < min(10, fuel_time - 0.35)
-        if not self.launching and flight_window and d < 3.5 and me["hp"] > zone["dps"]:
-            attained = p[2] + min(remain, fuel_time) * stats["max_rise_speed"]
+        horizontal_speed = math.hypot(*me["vel"][:2])
+        flight_window = 2 < remain < min(17, energy / stats["jet_drain"] * 1.35)
+        if not self.launching and flight_window and d < 2.0 and horizontal_speed <= 2 and me["hp"] > zone["dps"]:
+            climb, reserve = project_ascent(remain, me["vel"][2], energy, stats, me["grounded"])
+            attained = p[2] + climb
             slope = math.tan(self.config["mech"]["max_pitch"])
             protected, exposed = 0.0, 0.0
             for enemy, weight in threats:
@@ -352,12 +373,24 @@ class Bot:
                     exposed += weight
             clear_ascent = all(self.arena.clear(*p[:2], z, 2.5 * size, 9 * size)
                                for z in range(math.ceil(p[2]), math.ceil(attained), 3))
-            self.launching = protected > exposed and clear_ascent
-        if remain <= 0 or energy < 0.8:
+            self.launching = protected > exposed and clear_ascent and reserve > 2
+        if self.launching and (remain <= 0 or energy < 0.8 or d > max(3.5, zone["radius"] * 0.75)):
             self.launching = False
+            self.landing = anchor
+        if self.landing is not None:
+            if me["grounded"]:
+                self.landing = None
+            else:
+                # If the center is obstructed at this height, descend toward the
+                # closest reachable point on the inward side of the storm.
+                if not self.arena.air_lane(p[:2], self.landing, p[2], size):
+                    candidates = [(p[0] + 4 * dx, p[1] + 4 * dy) for dx, dy in ANGLES]
+                    valid = [q for q in candidates if self.arena.air_lane(p[:2], q, p[2], size)]
+                    self.landing = min(valid, key=lambda q: distance(q, anchor), default=p[:2])
+                return True, self.landing
         if self.launching:
             act["jump"] = bool(me["grounded"])
-            act["boost"] = not me["grounded"]
+            act["boost"] = not me["grounded"] and jet_pulse(me["vel"][2], energy, stats)
             return True, anchor
         return False, goal
 
@@ -375,7 +408,7 @@ class Bot:
                      - (24 if a.get("charging") else 0))
         visible = enemies[0] if enemies else None
         threats = [(a, 2.4 if a.get("charging") else 1.6 if "laser" in a.get("weapons", ()) else 1)
-                   for a in enemies[:2] if distance(p, a["pos"]) < 235]
+                   for a in enemies if distance(p, a["pos"]) < 235]
         if not threats and now - self.last_damage < 4:
             old = [(a, seen) for a, seen in self.memory["mechs"].values() if a["kind"] == "mech"]
             if old:
@@ -385,6 +418,7 @@ class Bot:
         slot = next((i for i, w in enumerate(me["weapons"]) if w and w["kind"] != "gun"), 1)
         second = me["weapons"][slot]
         kind = second["kind"] if second else None
+        weapon_values = dict(WEAPONS, laser=3 if nearest > 85 else 1)
         final = zone["next_radius"] <= 0
         goal = tuple(zone["next_center"])
         margin = zone["radius"] - distance(p, zone["center"])
@@ -419,7 +453,7 @@ class Bot:
                 if allowed:
                     goal = min(allowed, key=lambda q: distance(q, anchor) - 0.65 * distance(q, visible["pos"]))
         elif not urgent and not final and time.perf_counter() < started + 0.013:
-            objective = self.objective(obs, enemies, kind, p, zone, now)
+            objective = self.objective(obs, enemies, kind, p, zone, now, weapon_values)
             if objective:
                 group, _, q = objective
                 d = distance(p, q)
@@ -443,9 +477,11 @@ class Bot:
             choices = obs["offer"]["choices"]
             act["pick"] = max(range(len(choices)), key=lambda i: priorities.get(choices[i]["id"], 40))
         pickups = [item for item in obs["pickups"] if distance(p, item["pos"]) < self.config["loot"]["pickup_radius"] - 0.1
-                   and abs(p[2] - item["pos"][2]) < 3.9 and WEAPONS[item["kind"]] > WEAPONS.get(kind, 0)]
-        if pickups and not (second and second.get("charge")):
-            act["take"] = max(pickups, key=lambda item: WEAPONS[item["kind"]])["id"]
+                   and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
+        if pickups and not (second and second.get("charge")) and (
+            not second or kind == "mortar" or nearest > 35 and now - self.last_damage > 3
+        ):
+            act["take"] = max(pickups, key=lambda item: weapon_values[item["kind"]])["id"]
             if second:
                 act["drop"] = slot
         roof = self.arena.roof(*anchor) if final else -math.inf
@@ -458,8 +494,10 @@ class Bot:
             if enemies:
                 target = min(enemies, key=lambda a: distance(p, a["pos"]) * 0.28
                              + min(40, estimates[a["id"]][0]) * 2 + min(1200, estimates[a["id"]][1]) * 0.02
+                             - (rear_laser_bonus(a, p, self.config["sound"]["range"]["laser_charge"],
+                                                 math.radians(self.config["vision"]["fov_deg"])) if kind == "laser" else 0)
                              - (55 if kind == "lightning" and a.get("charging") and distance(p, a["pos"]) < 44 else 0))
-            if objective and objective[0] in ("mechs", "crates") and (not target or nearest > 125):
+            if objective and objective[0] in ("mechs", "crates") and (not target or nearest > 120 and not laser_threat):
                 group, ident, _ = objective
                 resource = next((a for a in obs[group] if a["id"] == ident), None)
                 if resource:
@@ -481,8 +519,19 @@ class Bot:
             else:
                 sweep = (now % 7) * math.tau / 1.8 if now % 7 < 1.8 and not urgent else 0
                 act["aim"] = [bearing(p, goal) + sweep, 0]
+        if threats and (retreat or flight or urgent) and not any(act["fire"]):
+            risks = [(bearing(p, a["pos"]), weight / (1 + distance(p, a["pos"]) / 120)) for a, weight in threats]
+            for projectile in obs["projectiles"][:12]:
+                q, v = projectile["pos"], projectile["vel"]
+                if distance(p, q) < 55 and (p[0] - q[0]) * v[0] + (p[1] - q[1]) * v[1] > 0:
+                    risks.append((math.atan2(-v[1], -v[0]), 1.5 if projectile["kind"] == "mortar" else 0.4))
+            yaw = defensive_yaw(me["aim"][0], risks, stats["turn_rate"])
+            # Keep tracking a viable return shot when it also faces incoming fire.
+            if not target or angle_delta(yaw, act["aim"][0]) > 1.0:
+                act["aim"] = [yaw, 0]
         goal = tuple(goal)
         d = distance(p, goal)
+        straight = 0.0
         if d > 0.18 or flight and not me["grounded"]:
             waypoint = goal
             if not flight and me["grounded"] and d < 140 and not self.arena.walk(p[:2], goal, size):
@@ -509,12 +558,13 @@ class Bot:
                         self.path.pop(0)
                     if self.path:
                         waypoint = self.path[0]
+            straight = distance(p, waypoint)
             dx, dy = waypoint[0] - p[0], waypoint[1] - p[1]
             if final and flight and not me["grounded"]:
-                dx -= me["vel"][0] * 0.55
-                dy -= me["vel"][1] * 0.55
+                dx = 0.30 * dx - 0.24 * me["vel"][0]
+                dy = 0.30 * dy - 0.24 * me["vel"][1]
             length = math.hypot(dx, dy)
-            divisor = max(1.3 if final else 3.3, length)
+            divisor = max(6 if flight and final else 3.3, length)
             act["move"] = [dx / divisor, dy / divisor]
         if not flight and not final and me["grounded"] and time.perf_counter() < started + 0.027:
             direction, dodge = self.dodge(obs, p, act["move"], size, now, started + 0.031)
@@ -523,6 +573,16 @@ class Bot:
                                 d > 4 and me["energy"] > (5 if urgent else 25))
         elif not flight and urgent and me["grounded"] and d > 6 and me["energy"] > 6:
             act["boost"] = True
+        charging = bool(second and second.get("charge"))
+        safe_travel = (me["grounded"] and not flight and not final and not retreat and not urgent and
+                       not charging and not any(act["fire"]) and nearest > 110 and now - self.last_damage > 4
+                       and straight > 23 and self.arena.walk(p[:2], (
+                           p[0] + act["move"][0] * 17, p[1] + act["move"][1] * 17), size))
+        reserve = min(62, me["max_energy"] * 0.58)
+        if self.ground_boost.active(now, me["energy"], stats, reserve, safe_travel):
+            act["boost"] = True
+        if retreat and not visible and not urgent and not flight and now - self.last_damage > 2.0:
+            act["move"] = [value * 0.38 for value in act["move"]]
         if me["grounded"] and d > 10 and not flight:
             if self.last_progress is None or distance(p, self.last_progress[1]) > 3:
                 self.last_progress = (now, p)
