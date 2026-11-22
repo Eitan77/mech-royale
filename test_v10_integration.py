@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 from controller import Bot
 from pilot import choose_movement
+from storm_tactics import artillery_shot
 
 KIT=Path(os.environ.get("MECH_KIT","/tmp/mech-kit/mechfight-kit"))
 
@@ -39,6 +40,19 @@ class Tests(unittest.TestCase):
             "kind":"laser","cooldown":0.,"charge":charge,
             "stats":copy.deepcopy(self.hello["config"]["weapons"]["laser"])}
         obs["self"]["aim"]=[0.,0.]
+
+    def test_stationary_target_behind_real_building_has_high_mortar_arc(self):
+        bot, _ = self.start()
+        a = (-151.55, -288.3)
+        b = (-15.55, -288.3)
+        ground_a, ground_b = bot.arena.ground(*a), bot.arena.ground(*b)
+        target = (*b, ground_b + 4.5)
+        self.assertFalse(bot.arena.shot((*a, ground_a + 7), target))
+        yaw, pitch = artillery_shot(bot.arena, (*a, ground_a + 9.5), target, (0, 0, 0),
+                                    self.hello["config"]["weapons"]["mortar"], 3, (-.7, 1.3),
+                                    time.perf_counter() + 1)
+        self.assertAlmostEqual(yaw, 0)
+        self.assertGreater(pitch, 1)
 
     def test_multi_tick_ambush_stays_silent_after_enemy_turns(self):
         bot,o=self.start()

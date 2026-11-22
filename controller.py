@@ -3,9 +3,9 @@ import math
 import time
 
 from arena import Arena
-from firing import firing_delay, project_position, shot_connects
+from firing import firing_delay, project_position, shot_connects, slew
 from pilot import choose_movement
-from storm_tactics import mortar_shot, storm_screen
+from storm_tactics import artillery_shot, mortar_shot, storm_screen
 import mechfight as mf
 from mobility import GroundBoost, defensive_yaw, jet_pulse, project_ascent, rear_laser_bonus
 from tactics_v5 import (classify_danger, next_mode, candidate_resource_target,
@@ -84,7 +84,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "V16 Indirect Artillery"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -135,6 +135,7 @@ class Bot:
         self.foliage_until = -100.
         self.foliage_active = False
         self.ambush_target_id = None
+        self.artillery_hold = None
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -397,6 +398,37 @@ class Bot:
         size = 1 + 0.05 * actor.get("cubes", 0)
         height = {"mech": 4.5 * size, "npc": self.config["npc"]["height"] * 0.5, "crate": 0.8}[kind]
         return p[0], p[1], p[2] + height
+
+    def fire_artillery(self, act, obs, target, mortar, slot, urgent, deadline):
+        if target is None or urgent or self.recovering or mortar["cooldown"] > .22:
+            return None
+        me = obs["self"]
+        p, stats = me["pos"], me["stats"]
+        is_mech = target.get("kind") == "mech"
+        reach = distance(p, target["pos"])
+        if reach < mortar["stats"]["splash_radius"] + 9 or me["hp"] < .42 * me["max_hp"]:
+            return None
+        delay = firing_delay(mortar)
+        if reach > 270 or time.perf_counter() >= deadline:
+            return None
+        origin = project_position((*p[:2], p[2] + stats["height"] + .5), me["vel"], delay)
+        velocity = target.get("vel", (0, 0, 0))
+        body = project_position(self.target_body(target), velocity, delay)
+        covered = not self.arena.shot((*p[:2], p[2] + stats["muzzle_height"]), body)
+        if is_mech and not covered and self.mode == "EVADE":
+            return None
+        cfg = self.config["mech"]
+        aim = artillery_shot(self.arena, origin, body, velocity, mortar["stats"],
+                             stats.get("radius", cfg["radius"] * (1 + .05 * me["cubes"])) + .5,
+                             (cfg["min_pitch"], cfg["max_pitch"]), deadline)
+        if aim is None:
+            return None
+        act["aim"] = list(aim)
+        yaw = slew(me["aim"][0], aim[0], stats["turn_rate"] * delay, True)
+        pitch = slew(me["aim"][1], aim[1], stats["pitch_rate"] * delay)
+        act["fire"][slot] = (mortar["cooldown"] <= .1 and angle_delta(yaw, aim[0]) < .012
+                             and abs(pitch - aim[1]) < .009)
+        return is_mech and covered
 
     def combat(self, act, obs, origin, target, retreat, urgent, final, primary_threat):
         me = obs["self"]
@@ -789,8 +821,7 @@ class Bot:
         kind = second["kind"] if second else None
         own_laser_charging = bool(kind=="laser" and second.get("charge",0)>0)
         weapon_values = dict(WEAPONS, laser=4 if nearest > 85 else 2,
-                             lightning=3, mortar=int(nearest > 50 and not any(
-                                 "laser" in e.get("weapons", ()) for e in enemies)))
+                             lightning=3, mortar=5 if nearest > 60 and now < 365 else 1)
         final = zone["next_radius"] <= 0
         goal = tuple(zone["next_center"])
         margin = zone["radius"] - distance(p, zone["center"])
@@ -1003,10 +1034,14 @@ class Bot:
                           "reactor": 60, "sensors": 49, "gyros": 48, "laser_damage": 62, "gun_rate": 59}
             choices = obs["offer"]["choices"]
             act["pick"] = upgrade_scoremax(choices, me, now, zone)
+            if kind == "mortar" and choices[act["pick"]]["id"] in {"mortar_velocity", "gun_mag", "gun_rate", "gun_velocity", "sensors", "gyros"}:
+                for upgrade in ("mortar_reload", "mortar_splash"):
+                    index = next((i for i, choice in enumerate(choices) if choice["id"] == upgrade), None)
+                    if index is not None:
+                        act["pick"] = index
+                        break
         pickups = [item for item in obs["pickups"] if distance(p, item["pos"]) < self.config["loot"]["pickup_radius"] - 0.1
                    and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
-        if kind == "mortar" and laser_threat and not pickups:
-            act["drop"] = slot
         if pickups and not (second and second.get("charge")) and (
             not second or kind == "mortar" or nearest > 35 and now - self.last_damage > 3
         ):
@@ -1098,9 +1133,22 @@ class Bot:
                     target = min(nuisance, key=lambda a: distance(p, a["pos"]))
         priority_enemy = None if (target is not None and target.get("kind") in ("npc", "crate")
                                   and self.mode == "FARM") else visible
-        self.combat(act, obs, origin, target, retreat, urgent,
-                    final and (hp < .86 or remain < 12) and
-                    (not target or target.get("kind") != "npc"), priority_enemy)
+        artillery = None
+        if kind == "mortar" and not flight and not capture and time.perf_counter() < started + .020:
+            artillery = self.fire_artillery(act, obs, target, second, slot, urgent, started + .025)
+        if artillery is None:
+            self.combat(act, obs, origin, target, retreat, urgent,
+                        final and (hp < .86 or remain < 12) and
+                        (not target or target.get("kind") != "npc"), priority_enemy)
+        if artillery and act["fire"][slot]:
+            self.artillery_hold = (target["id"], now + second["stats"]["cooldown"] + .25)
+        hold_artillery = (kind == "mortar" and not capture and not urgent and not danger["exposed"]
+                          and not retreat and not final and next_margin > 14 and target is not None
+                          and (artillery is True or artillery is None and self.artillery_hold is not None
+                               and target["id"] == self.artillery_hold[0] and now < self.artillery_hold[1])
+                          and not imminent_projectile(me, obs["projectiles"], zone))
+        if hold_artillery:
+            goal = p[:2]
         if (self.foliage_active and nearest>100 and
                 not danger.get("charging") and not attacking_npcs):
             # No weapon report may betray our silent canopy retreat.
@@ -1146,7 +1194,7 @@ class Bot:
                        and (not me["grounded"] or self.arena.walk(p[:2], anchor, size)))
         if center_lock:
             act["move"] = self.center_control(me, anchor)
-        if not center_lock and not flight and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:
+        if not center_lock and not flight and not hold_artillery and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:
             holding_laser = kind == "laser" and act["fire"][slot] and (
                 own_laser_charging or second["cooldown"] <= .1
             )
