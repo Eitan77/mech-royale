@@ -13,7 +13,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Compile every module
-        run: python3 -m py_compile controller.py arena.py firing.py mechfight.py mobility.py pilot.py storm_tactics.py tactics_v5.py test_v5_policy.py scoremax_v8.py test_scoremax_v8.py test_v8b_npc_integration.py foliage_v9.py test_foliage_v9.py throne_v6.py test_throne_v6.py mechanics_v9.py test_mechanics_v9.py test_v9_integration.py tactical_v10.py test_tactical_v10.py test_v10_integration.py pursuit_v11.py test_pursuit_v11.py test_v11_integration.py
+        run: python3 -m py_compile controller.py arena.py firing.py mechfight.py mobility.py pilot.py storm_tactics.py tactics_v5.py test_v5_policy.py scoremax_v8.py test_scoremax_v8.py test_v8b_npc_integration.py foliage_v9.py test_foliage_v9.py throne_v6.py test_throne_v6.py mechanics_v9.py test_mechanics_v9.py test_v9_integration.py tactical_v10.py test_tactical_v10.py test_v10_integration.py pursuit_v11.py test_pursuit_v11.py test_v11_integration.py v11_replay_diagnostics.py
       - name: Run V5 policy regression tests
         run: python3 -m unittest -v test_v5_policy
       - name: V8B scoremax policy tests
@@ -44,6 +44,8 @@ jobs:
         run: python3 -m unittest -v test_pursuit_v11
       - name: V11 multi-tick pursuit denial and storm integration
         run: python3 -m unittest -v test_v11_integration
+      - name: Replay real recorded attack sequence and report activated policies
+        run: python3 v11_replay_diagnostics.py
       - name: Verify protocol and 50ms response budget
         run: |
           python3 /tmp/mech-kit/mechfight-kit/check/check.py \
