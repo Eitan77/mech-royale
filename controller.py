@@ -594,6 +594,28 @@ class Bot:
                             and jet_pulse(me["vel"][2], me["energy"], stats))
         return True, landing if traversing or me["energy"] < 8 else start
 
+    @staticmethod
+    def center_control(me, anchor):
+        """Brake on approach instead of crossing a small circle at full speed."""
+        p, vel, stats = me["pos"], me["vel"], me["stats"]
+        accel = stats["ground_accel"] if me["grounded"] else stats["air_accel"]
+        speed = stats["walk_speed"]
+        dx, dy = anchor[0] - p[0], anchor[1] - p[1]
+        d = math.hypot(dx, dy)
+        lookahead = (0.12 if me["grounded"] else .4)
+        want_x, want_y = dx / lookahead, dy / lookahead
+        limit = min(speed, math.sqrt(2 * accel * d) * .85)
+        magnitude = math.hypot(want_x, want_y)
+        if magnitude > limit and magnitude > 0:
+            want_x *= limit / magnitude
+            want_y *= limit / magnitude
+        # Compensate for inertia when the current velocity points across the goal.
+        if d < 1.5:
+            want_x -= min(1, 1.5 - d) * .20 * vel[0]
+            want_y -= min(1, 1.5 - d) * .20 * vel[1]
+        scale = max(speed, math.hypot(want_x, want_y))
+        return [want_x / scale, want_y / scale]
+
     def act(self, obs):
         started = time.perf_counter()
         now, me, zone = obs["t"], obs["self"], obs["zone"]
@@ -813,13 +835,17 @@ class Bot:
             length = math.hypot(dx, dy)
             divisor = max(6 if flight and final else 3.3, length)
             act["move"] = [dx / divisor, dy / divisor]
-        if not flight and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:
+        center_lock = (final and distance(goal, anchor) < .05 and distance(p, anchor) < 4
+                       and (not me["grounded"] or self.arena.walk(p[:2], anchor, size)))
+        if center_lock:
+            act["move"] = self.center_control(me, anchor)
+        if not center_lock and not flight and me["grounded"] and (not self.recovering or math.hypot(*act["move"]) > .1) and (not final or urgent) and time.perf_counter() < started + 0.028:
             direction, tactical_boost = choose_movement(
                 self.arena, me, zone, act["move"], threats, obs["projectiles"], size, urgent, started + 0.032, capture, now
             )
             act["move"] = list(direction)
             act["boost"] = bool(tactical_boost or urgent and d > 4 and me["energy"] > 7)
-        elif not flight and urgent and me["grounded"] and d > 6 and me["energy"] > 6:
+        elif not center_lock and not flight and urgent and me["grounded"] and d > 6 and me["energy"] > 6:
             act["boost"] = True
         charging = bool(second and second.get("charge"))
         safe_travel = (not capture and me["grounded"] and not flight and not final and not retreat and not urgent and
