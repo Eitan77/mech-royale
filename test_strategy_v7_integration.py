@@ -65,6 +65,20 @@ class Integration(unittest.TestCase):
         self.assertFalse(act.get("jump",False))
         self.assertLess(math.hypot(*act["move"]),.01)
 
+    def test_healing_bot_still_collects_safe_cube(self):
+        bot,obs=self.clone()
+        p=obs["self"]["pos"]
+        obs["self"]["hp"]=700
+        obs["mechs"]=[]
+        obs["zone"]["next_center"]=p[:2]
+        obs["zone"]["next_radius"]=380
+        obs["cubes"]=[{"id":1999,"pos":[p[0],p[1]+6,p[2]]}]
+        bot.arena.walk=lambda *args:True
+        act=bot.act(obs)
+        self.assertEqual(bot.mode,"HEAL")
+        self.assertGreater(act["move"][1],.2)
+        self.assertFalse(any(act["fire"]))
+
     def test_healing_does_not_crawl_into_shrinking_storm(self):
         bot,obs=self.clone()
         p=obs["self"]["pos"]
