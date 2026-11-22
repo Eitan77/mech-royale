@@ -985,7 +985,7 @@ class Bot:
                 nearest>44 and not attacking_npcs and
                 (hp<.92 or now-self.last_enemy_seen<5.6) and
                 hold_shadow(me,self.shadow_goal,enemies,zone,self.arena,
-                            started+.017)):
+                            started+.017,now)):
             self.shadow_active=True
         else:
             self.shadow_goal=None
