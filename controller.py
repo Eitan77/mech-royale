@@ -927,19 +927,23 @@ class Bot:
                 self.arena, me, zone, act["move"], threats, obs["projectiles"], size, urgent, started + 0.032, capture, now
             )
             act["move"] = list(direction)
-            act["boost"] = bool(tactical_boost or urgent and d > 4 and me["energy"] > 7)
-        elif not center_lock and not flight and urgent and me["grounded"] and d > 6 and me["energy"] > 6:
-            act["boost"] = True
+            emergency_storm = not me["in_zone"] or (zone["dps"] >= 100 and margin < 3)
+            floor = energy_floor(me, emergency_storm)
+            act["boost"] = bool((tactical_boost and me["energy"] > min(floor, 20)) or
+                                (urgent and d > 4 and me["energy"] > floor))
+        elif not center_lock and not flight and urgent and me["grounded"] and d > 6:
+            act["boost"] = me["energy"] > energy_floor(
+                me, not me["in_zone"] or (zone["dps"] >= 100 and margin < 3))
         charging = bool(second and second.get("charge"))
         safe_travel = (not capture and me["grounded"] and not flight and not final and not retreat and not urgent and
                        not charging and not any(act["fire"]) and nearest > 110 and now - self.last_damage > 4
-                       and straight > 23 and self.arena.walk(p[:2], (
+                       and straight > 20 and self.arena.walk(p[:2], (
                            p[0] + act["move"][0] * 17, p[1] + act["move"][1] * 17), size))
-        reserve = min(62, me["max_energy"] * 0.58)
+        reserve = energy_floor(me)
         if self.ground_boost.active(now, me["energy"], stats, reserve, safe_travel):
             act["boost"] = True
-        if retreat and not visible and not urgent and not flight and now - self.last_damage > 2.0:
-            act["move"] = [value * 0.38 for value in act["move"]]
+        # Do not slow to 38% speed merely two seconds after taking damage.
+        # The practice squad can still share exact tracking during this period.
         if not capture and me["grounded"] and d > 10 and not flight:
             if self.last_progress is None or distance(p, self.last_progress[1]) > 3:
                 self.last_progress = (now, p)
