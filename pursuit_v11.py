@@ -134,15 +134,14 @@ class ShadowAtlas:
                     best,best_score=q,score
         return (best,best_score) if best else None
 
-def hold_shadow(me,goal,enemies,zone,arena,deadline):
+def hold_shadow(me,goal,enemies,zone,arena,deadline,now=0.):
     if goal is None or dist(me["pos"],goal)>90:return False
     future_excess=max(0.,dist(goal,zone["next_center"])-
                       max(0.,zone["next_radius"]-12))
     transit=future_excess/max(1.,me["stats"]["walk_speed"]*.60)
-    if zone["shrink_end"]-me.get("t",0)<0:
+    if zone["shrink_end"]-now < transit*1.55+13:
         return False
-    # The controller checks urgency independently. Don't reject cover
-    # outside the next circle when there is ample time to leave it.
+    # The controller checks immediate storm urgency independently.
     if not enemies:return True # preserve hiding through shared 5s tracking
     if time.perf_counter()>deadline:return True
     p=me["pos"];size=1+.05*me["cubes"]
