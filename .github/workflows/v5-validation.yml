@@ -22,6 +22,8 @@ jobs:
             https://www.joinbuilders.org/buildathon/tracks/builders/files/mechfight-kit.tar.gz
           mkdir -p /tmp/mech-kit
           tar -xzf /tmp/mechfight-kit.tar.gz -C /tmp/mech-kit
+      - name: Adversarial integration smoke tests with actual map
+        run: python3 -m unittest -v test_v5_integration
       - name: Verify protocol and 50ms response budget
         run: |
           python3 /tmp/mech-kit/mechfight-kit/check/check.py \
