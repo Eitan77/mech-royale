@@ -89,6 +89,7 @@ class Bot:
         self.cover = None
         self.cover_update = -100
         self.last_progress = None
+        self.detour = None
         self.launching = False
         self.laser_target = None
         self.loot_goal = None
@@ -476,6 +477,51 @@ class Bot:
             return True, anchor
         return False, goal
 
+    def travel_waypoint(self, p, goal, size, now, start):
+        """Prefer a clear segment and retain detours long enough to round a wall."""
+        d = distance(p, goal)
+        if d < .1:
+            return goal
+        span = min(d, 65)
+        limit = (p[0] + (goal[0] - p[0]) * span / d, p[1] + (goal[1] - p[1]) * span / d)
+        if self.arena.walk(p[:2], limit, size):
+            self.detour = None
+            self.path.clear()
+            return goal
+        changed = self.path_goal is None or distance(goal, self.path_goal) > 15
+        if changed:
+            self.path.clear()
+            self.detour = None
+        if (changed or not self.path or now - self.path_update > 1.6) and time.perf_counter() < start + .023:
+            new_path = self.arena.route(p[:2], limit, round(size, 2), start + .028)
+            if new_path or changed:
+                self.path = new_path
+            self.path_goal, self.path_update = goal, now
+        while self.path and distance(p, self.path[0]) < 2.5:
+            self.path.pop(0)
+        for node in reversed(self.path[:4]):
+            if self.arena.walk(p[:2], node, size):
+                return node
+        if self.detour and distance(p, self.detour) > 2 and self.arena.walk(p[:2], self.detour, size):
+            return self.detour
+        ideal = bearing(p, goal)
+        best, value = None, -math.inf
+        for radius in (9, 4):
+            for dx, dy in ANGLES:
+                if time.perf_counter() >= start + .033:
+                    break
+                q = p[0] + dx * radius, p[1] + dy * radius
+                if self.arena.walk(p[:2], q, size):
+                    score = d - distance(q, goal) + .3 * radius
+                    if score > value:
+                        best, value = q, score
+            if best is not None:
+                break
+        if best is not None:
+            self.detour = best
+            return best
+        return self.path[0] if self.path else (p[0] + math.cos(ideal), p[1] + math.sin(ideal))
+
     def act(self, obs):
         started = time.perf_counter()
         now, me, zone = obs["t"], obs["self"], obs["zone"]
@@ -684,31 +730,7 @@ class Bot:
         d = distance(p, goal)
         straight = 0.0
         if d > 0.18 or final and not me["grounded"]:
-            waypoint = goal
-            if not flight and me["grounded"] and d < 140 and not self.arena.walk(p[:2], goal, size):
-                replan = self.path_goal is None or distance(goal, self.path_goal) > 10 or now - self.path_update > 1.1
-                if replan and time.perf_counter() < started + 0.021:
-                    self.path = self.arena.route(p[:2], goal, round(size, 2), started + 0.026)
-                    self.path_goal, self.path_update = goal, now
-                while self.path and distance(p, self.path[0]) < 3.0:
-                    self.path.pop(0)
-                for node in reversed(self.path[:3]):
-                    if self.arena.walk(p[:2], node, size):
-                        waypoint = node
-                        break
-                else:
-                    if self.path:
-                        waypoint = self.path[0]
-            elif not flight and me["grounded"] and d >= 140:
-                short = (p[0] + (goal[0] - p[0]) * 80 / d, p[1] + (goal[1] - p[1]) * 80 / d)
-                if not self.arena.walk(p[:2], short, size):
-                    if (not self.path or now - self.path_update > 0.8) and time.perf_counter() < started + 0.021:
-                        self.path = self.arena.route(p[:2], short, round(size, 2), started + 0.026)
-                        self.path_update, self.path_goal = now, short
-                    while self.path and distance(p, self.path[0]) < 3:
-                        self.path.pop(0)
-                    if self.path:
-                        waypoint = self.path[0]
+            waypoint = self.travel_waypoint(p, goal, size, now, started) if not flight and me["grounded"] else goal
             straight = distance(p, waypoint)
             dx, dy = waypoint[0] - p[0], waypoint[1] - p[1]
             if (final or flight) and not me["grounded"]:
