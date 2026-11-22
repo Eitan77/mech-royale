@@ -100,7 +100,7 @@ def deliberate_mech_fire(me,target,mode,now,last_damage,zone):
     if mode!="FIGHT":return False
     # Defend when enemy is actually shooting at us or very close.
     if d<57:return True
-    if d<135 and aimed_at_us(target,me,tolerance=.5):
+    if d<175 and aimed_at_us(target,me,tolerance=.5):
         return True
     return False
 
@@ -114,7 +114,11 @@ def should_silence(me,mode,zone,now,damage,urgent):
     next_margin=zone["next_radius"]-dist(p,zone["next_center"])
     time_left=zone["shrink_end"]-now
     speed=me["stats"]["walk_speed"]
-    eta=max(0,-next_margin+8)/max(1,speed*.65)
+    # While silent we intentionally cap travel below 5 m/s. Estimate the
+    # WORST practical detour at that reduced speed, not fast running speed.
+    # Otherwise the bot may crawl 200m from the zone and die in storm.
+    quiet_speed=min(4.5,.38*speed)
+    eta=1.6*max(0,-next_margin+12)/max(1,quiet_speed)
     return next_margin>=8 or time_left>eta+22
 
 def silence_movement(me,move,hold=False):
