@@ -1,0 +1,18 @@
+name: Official starter check
+on: push
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out starter
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build and run the official checker
+        run: |
+          curl -fsSL https://www.joinbuilders.org/buildathon/tracks/builders/files/mechfight-kit.tar.gz -o "$RUNNER_TEMP/mechfight-kit.tar.gz"
+          tar -xzf "$RUNNER_TEMP/mechfight-kit.tar.gz" -C "$RUNNER_TEMP"
+          kit="$RUNNER_TEMP/mechfight-kit"
+          for file in Dockerfile example_bot.py mechfight.py; do cmp "$file" "$kit/python/$file"; done
+          docker build --platform linux/amd64 -t mech-royale:starter .
+          python3 "$kit/check/check.py" --map-dir /arena -- docker run --rm -i --network none --cpus 1 --memory 512m --read-only --tmpfs /tmp:rw,size=64m --user 65534:65534 -v "$kit/arena:/arena:ro" mech-royale:starter
