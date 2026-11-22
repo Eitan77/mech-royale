@@ -15,6 +15,8 @@ from throne_v6 import defensive_contest, permit_stationary_laser
 from strategy_v7 import (situational_danger, mode_v7, deliberate_mech_fire,
                          should_silence, silence_movement, upgrade_v7,
                          healing_supply_drop, nearest_legal_final_ground)
+from scoremax_v8 import (npc_pressure, mode_v8, immediate_npc_escape,
+                         opportunistic_kill)
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -126,6 +128,7 @@ class Bot:
         self.final_ground_anchor = None
         self.final_ground_at = -100.0
         self.final_ground = None
+        self.last_npc_damage = -100.0
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -141,6 +144,9 @@ class Bot:
             kind = event["type"]
             if kind == "damaged":
                 self.last_damage = now
+                if (event.get("weapon") == "npc" or
+                        event.get("by") is not None and event["by"] >= 100):
+                    self.last_npc_damage = now
                 if event.get("bearing") is not None:
                     self.damage_bearing = event["bearing"]
             elif kind == "hit":
@@ -705,9 +711,12 @@ class Bot:
         enemies.sort(key=lambda a: distance(p, a["pos"]) - (28 if "laser" in a.get("weapons", ()) else 0)
                      - (24 if a.get("charging") else 0))
         visible = enemies[0] if enemies else None
+        attacking_npcs = npc_pressure(me, obs["mechs"], self.arena, now, self.last_npc_damage)
         threats = [(a, 2.4 if a.get("charging") else 1.6 if "laser" in a.get("weapons", ()) else 1)
                    for a in enemies if distance(p, a["pos"]) < (
                        280 if "laser" in a.get("weapons", ()) else 235)]
+        for npc in attacking_npcs[:3]:
+            threats.append((npc, .9))
         if not threats and now - self.last_damage < 4:
             old = [(a, seen) for a, seen in self.memory["mechs"].values() if a["kind"] == "mech"]
             if old:
@@ -782,9 +791,11 @@ class Bot:
                           aimed_exposed=0)
         laser_threat = danger["laser_exposed"] > 0
         estimates = {enemy["id"]: duel(me, enemy, self.config["weapons"], len(threats)) for enemy in enemies}
-        new_mode = mode_v7(self.mode, hp, danger, urgent, now,
+        new_mode = mode_v8(self.mode, hp, danger, urgent, now,
                            self.last_damage, self.last_hit,
-                           has_resource=self.resource_lock is not None)
+                           has_resource=self.resource_lock is not None,
+                           npc_active=bool(attacking_npcs),
+                           alive=obs["alive"])
         if new_mode != self.mode:
             self.mode, self.mode_since = new_mode, now
         retreat = self.mode in ("EVADE", "HEAL")
@@ -843,8 +854,9 @@ class Bot:
                 phase = int(now / 9) * 2.399963 + me["id"]
                 radius = min(75, zone["next_radius"] * 0.48)
                 goal = (cx + math.cos(phase) * radius, cy + math.sin(phase) * radius)
-        if self.mode == "FIGHT" and should_skirmish(
-                self.mode, visible, retreat, urgent, final, nearest):
+        if (self.mode == "FIGHT" and should_skirmish(
+                self.mode, visible, retreat, urgent, final, nearest)
+                and not attacking_npcs):
             # Fight while moving across the enemy's aim, with an outward bias
             # against short-range weapons and an inward bias with our lightning.
             enemy_pos = visible["pos"]
@@ -859,6 +871,13 @@ class Bot:
                 if distance(q, zone["center"]) < zone["radius"] - 18 and self.arena.walk(p[:2], q, size):
                     goal = q
                     break
+        if retreat and attacking_npcs and not final and not urgent:
+            # NPCs keep dealing damage every second, permanently blocking
+            # five-second health regeneration. Break LOS / leave their radius.
+            escape = immediate_npc_escape(me, attacking_npcs[0],
+                                          zone, self.arena, size)
+            if escape is not None:
+                goal = escape
         if retreat and not urgent and not final and hp > .38 and nearest > 23:
             safe_cubes = [cube["pos"] for cube in obs["cubes"]
                           if 3 < distance(p, cube["pos"]) < 9 and abs(p[2] - cube["pos"][2]) < 3.8
@@ -867,7 +886,7 @@ class Bot:
                           and self.arena.walk(p[:2], cube["pos"][:2], size)]
             if safe_cubes:
                 goal = min(safe_cubes, key=lambda q: distance(q, p))[:2]
-        if retreat and visible and not urgent and not final and objective is None and time.perf_counter() < started + .014:
+        if retreat and visible and not attacking_npcs and not urgent and not final and objective is None and time.perf_counter() < started + .014:
             screened = storm_screen(self.arena, p, visible, zone, size, started + .016)
             if screened is not None:
                 goal = screened
