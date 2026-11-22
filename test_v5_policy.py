@@ -14,6 +14,25 @@ class Tests(unittest.TestCase):
     def test_proactive_laser_evasion(self):
         d=classify_danger(self.me,[self.laser],DummyArena(True))
         self.assertEqual(next_mode("TRAVEL",1,d,False,10,-100,-100),"EVADE")
+    def test_laser_at_260m_is_not_ignored(self):
+        enemy=dict(self.laser,pos=[260,0,0])
+        d=classify_danger(self.me,[enemy],DummyArena(True))
+        self.assertEqual(d["charging"],1)
+        self.assertEqual(d["lasers"],1)
+
+    def test_fifth_nearest_charger_receives_priority(self):
+        gunners=[{"id":n+10,"kind":"mech","pos":[35+n*2,20,0],
+                  "weapons":["gun"],"cubes":0,"charging":False}
+                 for n in range(5)]
+        d=classify_danger(self.me,gunners+[dict(self.laser,pos=[250,0,0])],
+                          DummyArena(True))
+        self.assertEqual(d["charging"],1)
+
+    def test_gun_outside_range_not_exposed(self):
+        enemy=dict(self.laser,pos=[270,0,0],weapons=["gun"],charging=False)
+        d=classify_danger(self.me,[enemy],DummyArena(True))
+        self.assertEqual(d["exposed"],0)
+
     def test_occluded_laser_no_evasion(self):
         d=classify_danger(self.me,[self.laser],DummyArena(False))
         self.assertEqual(next_mode("TRAVEL",1,d,False,10,-100,-100),"TRAVEL")
