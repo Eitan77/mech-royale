@@ -19,6 +19,7 @@ from mechanics_v9 import (one_shot_laser_ambush, easy_laser_drone,
 from tactical_v10 import (imminent_projectile, sniper_choice,
                           resource_laser_silence)
 from pursuit_v11 import ShadowAtlas, focus_fire, hold_shadow, anti_lead
+from universal_upgrade_v11 import UniversalSculptor
 
 ANGLES = tuple((math.cos(i * math.tau / 12), math.sin(i * math.tau / 12)) for i in range(12))
 WEAPONS = {"gun": 0, "mortar": 0, "laser": 1, "lightning": 2}
@@ -85,7 +86,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V11-Shadowbreak"
+    name = "V11X-UniversalSculpt"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -142,6 +143,7 @@ class Bot:
         self.shadow_scan_at = -100.
         self.shadow_active = False
         self.shadow_sheltered = False
+        self.sculptor = UniversalSculptor()
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4)):
@@ -1228,6 +1230,14 @@ class Bot:
                 self.last_progress = (now, p)
         else:
             self.last_progress = None
+        # Isolated V11X experiment: the universal-only offer pool is drawn
+        # only when the cube is picked up with no weapon equipped. Never
+        # interrupt an existing hard-cover escape to begin this maneuver.
+        if (self.sculptor.stage!="IDLE" or
+                not (self.shadow_active or self.foliage_active or urgent)):
+            self.sculptor.apply(
+                obs,act,0 if attacking_npcs else nearest,self.last_damage,
+                self.config["cubes"]["upgrade_thresholds"],zone)
         return act
 
 
