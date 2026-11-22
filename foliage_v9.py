@@ -91,10 +91,19 @@ class Foliage:
                     x,y,lo,hi,r,tx,ty,tr,base=self.trees[i]
                     d2,t=segment_distance2(x,y,a,b)
                     if d2 < r*r:
-                        z=a[2]+(b[2]-a[2])*t
-                        if lo-.2<=z<=hi+.2:
-                            chord=2*math.sqrt(max(0.,r*r-d2))
-                            depth+=min(8.,chord*self.density)
+                        # The ray segment can END inside a crown. Only the
+                        # chord portion actually between its two endpoints
+                        # attenuates sight; counting 2*radius overstates cover.
+                        hlen=xy(a,b)
+                        reach=math.sqrt(max(0.,r*r-d2))/max(hlen,1e-9)
+                        t0=max(0.,t-reach)
+                        t1=min(1.,t+reach)
+                        z0=a[2]+(b[2]-a[2])*t0
+                        z1=a[2]+(b[2]-a[2])*t1
+                        if (t1>t0 and min(z0,z1)>=lo-.2
+                                and max(z0,z1)<=hi+.2):
+                            ray_inside=(t1-t0)*hlen
+                            depth+=min(8.,ray_inside*self.density)
                     d2,tt=segment_distance2(tx,ty,a,b)
                     if d2<tr*tr:
                         z=a[2]+(b[2]-a[2])*tt
