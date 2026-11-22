@@ -96,6 +96,8 @@ class Bot:
         self.roof_traversing = False
         self.ground_boost = GroundBoost()
         self.landing = None
+        self.evade_side = 1
+        self.evade_until = 0
 
     def remember(self, obs, now):
         for group, ttl in (("crates", 45), ("cubes", 18), ("pickups", 50), ("mechs", 4), ("projectiles", 0.25)):
@@ -121,7 +123,7 @@ class Bot:
                 self.memory["pickups"].pop(event["id"], None)
 
     def cover_point(self, p, threats, zone, size, anchor, now, deadline):
-        if now - self.cover_update < 0.7 and self.cover is not None and distance(p, self.cover) < 45:
+        if now - self.cover_update < 0.45 and self.cover is not None and distance(p, self.cover) < 45:
             return self.cover
         self.cover_update = now
         best, best_score = None, -math.inf
@@ -134,12 +136,15 @@ class Bot:
                 z = self.arena.ground(*q)
                 if distance(q, zone["center"]) > zone["radius"] - 2 or not self.arena.walk(p[:2], q, size):
                     continue
+                separation = min(distance(q, a["pos"]) for a, _ in threats)
+                if separation < 14 and radius > 0:
+                    continue
                 protected = 0
-                for enemy, weight in threats[:2]:
+                for enemy, weight in threats[:3]:
                     eye = (*enemy["pos"][:2], enemy["pos"][2] + 7 * (1 + 0.05 * enemy.get("cubes", 0)))
                     if not self.arena.shot(eye, (*q, z + 7 * size)):
                         protected += weight
-                score = 33 * protected - radius - 0.12 * distance(q, anchor)
+                score = 26 * protected - radius - 0.25 * distance(q, anchor) + 0.28 * min(75, separation)
                 if protected and score > best_score:
                     best, best_score = q, score
         self.cover = best
@@ -207,7 +212,7 @@ class Bot:
         p = actor["pos"]
         kind = actor.get("kind", "crate")
         size = 1 + 0.05 * actor.get("cubes", 0)
-        height = {"mech": 4.5 * size, "npc": 1, "crate": 0.8}[kind]
+        height = {"mech": 4.5 * size, "npc": self.config["npc"]["height"] * 0.5, "crate": 0.8}[kind]
         body = (p[0], p[1], p[2] + height)
         lead = intercept(origin, body, actor.get("vel", (0, 0, 0)), stats["speed"])
         return body, lead
@@ -383,9 +388,9 @@ class Bot:
             else:
                 # If the center is obstructed at this height, descend toward the
                 # closest reachable point on the inward side of the storm.
-                if not self.arena.air_lane(p[:2], self.landing, p[2], size):
+                if time.perf_counter() < deadline and not self.arena.air_lane(p[:2], self.landing, p[2], size):
                     candidates = [(p[0] + 4 * dx, p[1] + 4 * dy) for dx, dy in ANGLES]
-                    valid = [q for q in candidates if self.arena.air_lane(p[:2], q, p[2], size)]
+                    valid = [q for q in candidates if time.perf_counter() < deadline and self.arena.air_lane(p[:2], q, p[2], size)]
                     self.landing = min(valid, key=lambda q: distance(q, anchor), default=p[:2])
                 return True, self.landing
         if self.launching:
@@ -424,7 +429,12 @@ class Bot:
         margin = zone["radius"] - distance(p, zone["center"])
         next_margin = zone["next_radius"] - distance(p, goal)
         remain = max(0, zone["shrink_end"] - now)
-        urgent = not me["in_zone"] or (not final and (margin < 13 or -next_margin > max(0, remain - 7) * stats["walk_speed"] * 0.72))
+        walk_speed = stats["walk_speed"]
+        transit = max(0, -next_margin + 16) / max(1, walk_speed * 0.72)
+        pressure_margin = 4 if not threats else 9 + min(14, len(threats) * 3)
+        urgent = not me["in_zone"] or (not final and (
+            margin < 13 or next_margin < 10 and transit + pressure_margin > remain
+        ))
         if not final and not urgent:
             d = distance(p, goal)
             safe_radius = max(0, zone["next_radius"] - min(38, zone["next_radius"] * 0.4))
@@ -448,10 +458,16 @@ class Bot:
                 away = bearing(visible["pos"], p)
                 options = [(p[0] + 14 * math.cos(away + off), p[1] + 14 * math.sin(away + off))
                            for off in (0.85, -0.85, 1.45, -1.45, 0)]
+                if now >= self.evade_until:
+                    self.evade_side *= -1
+                    self.evade_until = now + 0.75 + (me["id"] % 4) * 0.12
+                side = bearing(visible["pos"], p) + self.evade_side * 1.30
+                options.insert(0, (p[0] + 17 * math.cos(side), p[1] + 17 * math.sin(side)))
                 allowed = [q for q in options if distance(q, zone["center"]) < zone["radius"] - 7
                            and self.arena.walk(p[:2], q, size)]
                 if allowed:
-                    goal = min(allowed, key=lambda q: distance(q, anchor) - 0.65 * distance(q, visible["pos"]))
+                    goal = min(allowed, key=lambda q: distance(q, anchor) * 0.85
+                               - 0.95 * distance(q, visible["pos"]) - (6 if q == options[0] and laser_threat else 0))
         elif not urgent and not final and time.perf_counter() < started + 0.013:
             objective = self.objective(obs, enemies, kind, p, zone, now, weapon_values)
             if objective:
@@ -469,6 +485,14 @@ class Bot:
                 phase = int(now / 9) * 2.399963 + me["id"]
                 radius = min(75, zone["next_radius"] * 0.48)
                 goal = (cx + math.cos(phase) * radius, cy + math.sin(phase) * radius)
+        if favorable and not urgent and not final and visible and kind == "lightning":
+            enemy_pos = visible["pos"]
+            d = distance(p, enemy_pos)
+            if d > 27 and d < 55 and distance(enemy_pos, zone["center"]) < zone["radius"] - 20:
+                step = min(12, d - 24) / d
+                flank = p[0] + (enemy_pos[0] - p[0]) * step, p[1] + (enemy_pos[1] - p[1]) * step
+                if self.arena.walk(p[:2], flank, size):
+                    goal = flank
         if obs["offer"]:
             priorities = {"nanites": 100 if now < 340 else 35, "plating": 92, "servos": 77, "armor": 75,
                           "gun_mag": 74 if now < 205 else 61, "jets": 67 if now < 360 else 82,
@@ -532,7 +556,7 @@ class Bot:
         goal = tuple(goal)
         d = distance(p, goal)
         straight = 0.0
-        if d > 0.18 or flight and not me["grounded"]:
+        if d > 0.18 or final and not me["grounded"]:
             waypoint = goal
             if not flight and me["grounded"] and d < 140 and not self.arena.walk(p[:2], goal, size):
                 replan = self.path_goal is None or distance(goal, self.path_goal) > 10 or now - self.path_update > 1.1
@@ -560,7 +584,7 @@ class Bot:
                         waypoint = self.path[0]
             straight = distance(p, waypoint)
             dx, dy = waypoint[0] - p[0], waypoint[1] - p[1]
-            if final and flight and not me["grounded"]:
+            if final and not me["grounded"]:
                 dx = 0.30 * dx - 0.24 * me["vel"][0]
                 dy = 0.30 * dy - 0.24 * me["vel"][1]
             length = math.hypot(dx, dy)
