@@ -40,6 +40,31 @@ class Tests(unittest.TestCase):
             "stats":copy.deepcopy(self.hello["config"]["weapons"]["laser"])}
         obs["self"]["aim"]=[0.,0.]
 
+    def test_lightning_pickup_keeps_laser_and_replaces_gun(self):
+        bot, obs = self.start()
+        self.give_laser(obs)
+        obs["mechs"] = []
+        obs["pickups"] = [{"id": 8001, "kind": "lightning", "pos": obs["self"]["pos"]}]
+        act = bot.act(obs)
+        self.assertEqual((act["take"], act["drop"]), (8001, 0))
+
+    def test_dual_loadout_uses_arc_against_close_lightning(self):
+        bot, obs = self.start()
+        self.give_laser(obs)
+        me = obs["self"]
+        me["weapons"][0] = {"kind": "lightning", "cooldown": 0.,
+                            "stats": self.hello["config"]["weapons"]["lightning"]}
+        me["energy"] = 100
+        target = self.target(obs, dist=25)
+        target["weapons"] = ["gun", "lightning"]
+        obs["mechs"] = [target]
+        bot.arena.shot = lambda *args: True
+        muzzle = (*me["pos"][:2], me["pos"][2] + me["stats"]["muzzle_height"])
+        act = {"fire": [False, False]}
+        with patch.object(bot, "lightning_connects", return_value=True):
+            bot.combat(act, obs, muzzle, target, False, False, False, target)
+        self.assertEqual(act["fire"], [True, False])
+
     def test_multi_tick_ambush_stays_silent_after_enemy_turns(self):
         bot,o=self.start()
         self.give_laser(o)

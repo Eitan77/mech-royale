@@ -84,7 +84,7 @@ def duel(me, enemy, weapons, attackers):
 
 
 class Bot:
-    name = "V9-Foliage-Throne"
+    name = "V13 Laser and Arc"
 
     def __init__(self, hello):
         self.config = hello["config"]
@@ -402,8 +402,9 @@ class Bot:
         me = obs["self"]
         cfg = self.config["mech"]
         gun = next((w for w in me["weapons"] if w and w["kind"] == "gun"), None)
-        secondary = next((w for w in me["weapons"] if w and w["kind"] in ("laser", "lightning")), None)
-        charge = secondary.get("charge", 0) if secondary else 0
+        laser = next((w for w in me["weapons"] if w and w["kind"] == "laser"), None)
+        lightning = next((w for w in me["weapons"] if w and w["kind"] == "lightning"), None)
+        charge = laser.get("charge", 0) if laser else 0
         if not target:
             act["reload"] = bool(gun and gun.get("ammo", 0) <= 6)
             self.laser_target = None
@@ -416,14 +417,20 @@ class Bot:
         gun_origin = project_position(origin, me["vel"], gun_delay)
         gun_speed = (gun["stats"] if gun else self.config["weapons"]["gun"])["speed"]
         lead = intercept(gun_origin, project_position(body, velocity, gun_delay), velocity, gun_speed)
-        laser = secondary and secondary["kind"] == "laser"
-        lightning = secondary and secondary["kind"] == "lightning"
+        # The arc covers the laser's close-range counter. Preserve a charged
+        # shot, but don't start a new charge inside an opposing arc's range.
+        enemy_arc = d < self.config["weapons"]["lightning"]["range"] + 10 and (
+            "lightning" in target.get("weapons", ())
+        )
+        use_laser_aim = laser and (charge or not enemy_arc and (
+            not gun or not (retreat or urgent or final) and laser["cooldown"] <= .15
+        ))
         aim_origin, aim_point = gun_origin, lead
-        if laser and (charge or not (retreat or urgent or final) and secondary["cooldown"] <= .15):
-            delay = firing_delay(secondary)
+        if use_laser_aim:
+            delay = firing_delay(laser)
             aim_origin = project_position(origin, me["vel"], delay)
             aim_point = project_position(body, velocity, delay)
-        elif lightning and d < secondary["stats"]["range"] - 1 and (not gun or target.get("charging")):
+        elif lightning and d < lightning["stats"]["range"] - 1 and (not gun or target.get("charging")):
             aim_origin, aim_point = origin, body
         yaw = bearing(aim_origin, aim_point)
         pitch = math.atan2(aim_point[2] - aim_origin[2], distance(aim_origin, aim_point))
@@ -439,7 +446,7 @@ class Bot:
             "crate": (1.15, 1.6),
         }[kind]
         aligned = bool(laser and error < .3 and shot_connects(
-            self.arena, origin, me, act["aim"], target, secondary, radius, height
+            self.arena, origin, me, act["aim"], target, laser, radius, height
         ))
         finishing = target.get("kind") == "mech" and target.get("hp", 1400) < 145 and d < 60
         is_rear_duel = target.get("kind") == "mech" and angle_delta(target["aim"][0], bearing(target["pos"], origin)) > 2.0
@@ -544,7 +551,7 @@ class Bot:
                         (not aligned and charge < max_hold)
                     ))
                 else:
-                    act["fire"][i] = bool(offensive and not urgent and clear and allowed_pitch and error < 0.10
+                    act["fire"][i] = bool(offensive and not urgent and not enemy_arc and clear and allowed_pitch and error < 0.10
                                           and 2 < d < stats["range"] - 3 and weapon["cooldown"] <= 0.1
                                           and (target.get("kind") == "mech" or not primary_threat))
                     if act["fire"][i]:
@@ -784,13 +791,21 @@ class Bot:
                 a, _ = min(old, key=lambda entry: distance(p, entry[0]["pos"]))
                 threats.append((a, 1.3))
         nearest = min((distance(p, a["pos"]) for a in enemies), default=999)
-        slot = next((i for i, w in enumerate(me["weapons"]) if w and w["kind"] != "gun"), 1)
+        slots = {weapon["kind"]: i for i, weapon in enumerate(me["weapons"]) if weapon}
+        slot = next((slots[k] for k in ("laser", "lightning", "mortar") if k in slots), 1)
         second = me["weapons"][slot]
         kind = second["kind"] if second else None
+        arc = me["weapons"][slots["lightning"]] if "lightning" in slots else None
         own_laser_charging = bool(kind=="laser" and second.get("charge",0)>0)
         weapon_values = dict(WEAPONS, laser=4 if nearest > 85 else 2,
                              lightning=3, mortar=int(nearest > 50 and not any(
                                  "laser" in e.get("weapons", ()) for e in enemies)))
+        if kind in ("laser", "lightning"):
+            for complementary in ("laser", "lightning"):
+                if complementary not in slots:
+                    weapon_values[complementary] = 5
+        if arc and kind == "laser":
+            weapon_values["lightning"] = 0
         final = zone["next_radius"] <= 0
         goal = tuple(zone["next_center"])
         margin = zone["radius"] - distance(p, zone["center"])
@@ -937,11 +952,11 @@ class Bot:
                 self.evade_side *= -1
                 self.evade_until = now + 0.85 + (me["id"] % 4) * 0.13
             radial = -0.30 if nearest < 38 else 0.0
-            if kind == "lightning":
-                arc_range = second["stats"]["range"]
+            if arc:
+                arc_range = arc["stats"]["range"]
                 equipment = visible.get("weapons", ())
                 can_short = (danger["exposed"] == 1 and len(threats) == 1 and
-                             hp > .75 and me["energy"] > second["stats"]["energy"] + 20 and
+                             hp > .75 and me["energy"] > arc["stats"]["energy"] + 20 and
                              "laser" in equipment and "mortar" not in equipment)
                 if can_short and .67 * arc_range < nearest < arc_range + 14:
                     radial = .46
@@ -1007,12 +1022,14 @@ class Bot:
                    and abs(p[2] - item["pos"][2]) < 3.9 and weapon_values[item["kind"]] > weapon_values.get(kind, 0)]
         if kind == "mortar" and laser_threat and not pickups:
             act["drop"] = slot
-        if pickups and not (second and second.get("charge")) and (
+        if pickups and not own_laser_charging and (
             not second or kind == "mortar" or nearest > 35 and now - self.last_damage > 3
         ):
-            act["take"] = max(pickups, key=lambda item: weapon_values[item["kind"]])["id"]
-            if second:
-                act["drop"] = slot
+            pickup = max(pickups, key=lambda item: weapon_values[item["kind"]])
+            act["take"] = pickup["id"]
+            if len(slots) == len(me["weapons"]):
+                keeps_pair = {kind, pickup["kind"]} == {"laser", "lightning"}
+                act["drop"] = slots.get("gun", slot) if keeps_pair else slot
         capture = self.finish_capture(obs, enemies) if not urgent and not final else None
         if capture:
             goal = tuple(capture["pos"][:2])
@@ -1075,7 +1092,7 @@ class Bot:
                              + min(40, estimates[a["id"]][0]) * 2 + min(1200, estimates[a["id"]][1]) * .02
                              - (rear_laser_bonus(a, p, self.config["sound"]["range"]["laser_charge"],
                                                  math.radians(self.config["vision"]["fov_deg"])) if kind == "laser" else 0)
-                             - (55 if kind == "lightning" and a.get("charging") and distance(p, a["pos"]) < 44 else 0))
+                             - (55 if arc and a.get("charging") and distance(p, a["pos"]) < arc["stats"]["range"] - 1 else 0))
                 if contesting:
                     candidates = (sorted(contesting,
                         key=lambda e: distance(e["pos"],zone["next_center"]))+
