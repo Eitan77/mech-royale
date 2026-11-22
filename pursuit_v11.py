@@ -102,8 +102,13 @@ class ShadowAtlas:
                 g=arena.ground(*q)
                 if not arena.clear(q[0],q[1],g,2.5*size+.2,9*size):
                     continue
-                # Directly walkable cover is safer than a long A* detour.
-                if not arena.walk(p[:2],q,size):continue
+                # Truly useful shadows are often BEHIND a wall, so a
+                # direct path is not always available. Let the existing A*
+                # route around a nearby corner; penalize the extra exposure.
+                direct=arena.walk(p[:2],q,size)
+                if not direct and (d>45 or
+                        zone["shrink_end"]-now<1.8*eta+15):
+                    continue
                 blocked=0
                 for enemy in shooters:
                     scale=1+.05*enemy.get("cubes",0)
@@ -117,7 +122,8 @@ class ShadowAtlas:
                 if min(dist(q,e["pos"]) for e in shooters)<48:continue
                 score=(70*blocked-1.4*d+
                        .15*min(dist(q,e["pos"]) for e in shooters)-
-                       .16*dist(q,zone["next_center"]))
+                       .16*dist(q,zone["next_center"])-
+                       (24 if not direct else 0))
                 if blocked==len(shooters):score+=50
                 if score>best_score:
                     best,best_score=q,score
