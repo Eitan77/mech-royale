@@ -7,13 +7,24 @@ def xy_distance(a,b):
 def classify_danger(me,enemies,arena,max_checks=4):
     """Track visible firing lanes, not all enemies inside memory radius."""
     p=me["pos"]
-    chosen=sorted(enemies,key=lambda e:xy_distance(p,e["pos"]))[:max_checks]
+    # A charging laser at 260m is more dangerous than a closer gunner.
+    # Prioritize charging lasers, then other lasers, while bounding costly
+    # geometry tests to max_checks per decision.
+    def priority(e):
+        d=xy_distance(p,e["pos"])
+        laser="laser" in e.get("weapons",())
+        threatening=laser and d <= 280
+        return (0 if threatening and e.get("charging") else
+                1 if threatening else 2, d)
+    chosen=sorted(enemies,key=priority)[:max_checks]
     exposed=near=lasers=charging=0
     closest=math.inf
     for e in chosen:
         d=xy_distance(p,e["pos"])
         closest=min(closest,d)
-        if d>230: continue
+        # A laser reaches 280m; gun-only threats stop nearer.
+        equipment=e.get("weapons",())
+        if d > (280 if "laser" in equipment else 235): continue
         if d<85: near+=1
         src=(e["pos"][0],e["pos"][1],e["pos"][2]+7*(1+.05*e.get("cubes",0)))
         dest=(p[0],p[1],p[2]+.55*me["stats"]["height"])
